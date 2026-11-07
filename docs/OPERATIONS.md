@@ -6,6 +6,7 @@ How to deploy, run, observe and repair TicketForge. Commands assume the Docker C
 
 - [Everyday commands](#everyday-commands)
 - [Deploying](#deploying)
+- [Deploying with Dokploy](#deploying-with-dokploy)
 - [TLS certificates](#tls-certificates)
 - [Migrations](#migrations)
 - [Backups and restore](#backups-and-restore)
@@ -78,6 +79,38 @@ Because old code keeps running while migrations apply, every migration must work
 ### Sizing
 
 The defaults are 3 Gunicorn workers, 4 Uvicorn workers and 4 Celery processes; the overlay raises them to 5, 4 and 8. Each API worker holds its own catalogue cache and its own connection pools. Run exactly one `beat`, because two would queue every scheduled task twice. Any number of `worker` containers is fine.
+
+## Deploying with Dokploy
+
+[Dokploy](https://docs.dokploy.com/) runs Traefik on ports 80 and 443 and terminates HTTPS itself, so the stack above, whose nginx wants the same ports, does not fit. `docker-compose.dokploy.yml` is the variant for it:
+
+- nothing publishes a host port; Traefik reaches nginx on port 80 over Docker's network;
+- nginx is built with `NGINX_MODE=proxied`, which serves plain HTTP, passes on the `X-Forwarded-Proto` that Traefik sets, and takes the visitor's address from `X-Forwarded-For` (trusted only from private Docker addresses), so the per-IP rate limit sees visitors rather than the proxy;
+- every Django process runs with `DJANGO_DEBUG=0`, and the file is self-contained (no overlays, anchors or `!reset`), because Dokploy edits it to attach the domain;
+- with `DEMO_SEED=1`, the `migrate` job seeds the demo dataset once, when the database has no events.
+
+Steps in the Dokploy dashboard:
+
+1. In a project, **Create Service**, then **Compose**.
+2. Under **General**, pick the **Git** provider (a public repository URL needs no GitHub connection): repository `https://github.com/i-wajidrashid/ticketforge.git`, branch `main`, compose path `./docker-compose.dokploy.yml`. Save.
+3. Under **Environment**, paste the variables. Start from `.env.example`, generate every secret as in [Before the first deploy](#before-the-first-deploy), and set:
+
+   ```bash
+   DJANGO_ALLOWED_HOSTS=tickets.example.com
+   SITE_ORIGIN=https://tickets.example.com
+   CSRF_TRUSTED_ORIGINS=https://tickets.example.com
+   CORS_ALLOWED_ORIGINS=https://tickets.example.com
+   MEILI_MASTER_KEY=<at least 16 random bytes; Meilisearch refuses less in production>
+   STRIPE_GATEWAY=fake   # only for a demo; real test keys otherwise
+   DEMO_SEED=1           # demo only
+   ```
+
+4. Under **Domains**, add the host with service `nginx`, port `80`, HTTPS on and the Let's Encrypt certificate. Without a domain of your own yet, a name such as `tickets.203-0-113-10.sslip.io` resolves to the server address `203.0.113.10` through [sslip.io](https://sslip.io/) and can get a certificate the same way.
+5. **Deploy**, then follow the `migrate` container's log until it exits.
+
+To move to your own domain later, point its DNS `A` record at the server, change the host in **Domains** and in the four variables above, and deploy again.
+
+With `STRIPE_GATEWAY=fake` the pay button completes the order without showing a card form, and nothing is charged. `EMAIL_HOST=mailpit` keeps all mail inside the stack, so new sign-ups never receive their verification link; visitors use the seeded accounts instead (see `seed_demo_data`). For working sign-ups, set `EMAIL_HOST`, `EMAIL_PORT` and `EMAIL_USE_TLS` for a real SMTP relay.
 
 ## TLS certificates
 

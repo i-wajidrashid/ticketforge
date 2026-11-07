@@ -1,0 +1,190 @@
+# TicketForge behind a reverse proxy that terminates HTTPS: Dokploy (Traefik).
+#
+# Self-contained on purpose. Dokploy deploys a single compose file and edits
+# it to attach its domain labels, so this file uses no overlays, anchors or
+# `!reset` tags. Nothing publishes a host port: Traefik reaches nginx on the
+# shared Docker network, and the data stores stay on the project network.
+#
+# Dokploy writes the Environment tab to `.env` next to this file. See
+# docs/OPERATIONS.md, "Deploying with Dokploy", for the variables and steps.
+
+services:
+  mysql:
+    image: mysql:8.4
+    env_file: [.env]
+    environment:
+      MYSQL_TEST_GRANTS: "0"
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql-init.sh:/docker-entrypoint-initdb.d/10-init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: always
+
+  search:
+    image: getmeili/meilisearch:v1.11
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:?set MEILI_MASTER_KEY}
+      MEILI_ENV: production
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - meili_data:/meili_data
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:7700/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: always
+
+  # Catches outgoing mail when EMAIL_HOST=mailpit. Not reachable from outside.
+  mailpit:
+    image: axllent/mailpit:v1.20
+    restart: always
+
+  # One-shot: Django and Alembic migrations, then the demo data when
+  # DEMO_SEED=1 and the database has no events yet.
+  migrate:
+    image: ticketforge:latest
+    env_file: [.env]
+    command: ["migrate"]
+    environment:
+      SERVICE_ROLE: migrate
+      DJANGO_DEBUG: "0"
+    volumes:
+      - static_data:/app/staticfiles
+      - media_data:/app/media
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      search:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    image: ticketforge:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: [.env]
+    command: ["web"]
+    environment:
+      SERVICE_ROLE: web
+      DJANGO_DEBUG: "0"
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-3}
+    volumes:
+      - static_data:/app/staticfiles
+      - media_data:/app/media
+    expose: ["8000"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: always
+
+  api:
+    image: ticketforge:latest
+    env_file: [.env]
+    command: ["api"]
+    environment:
+      SERVICE_ROLE: api
+      DJANGO_DEBUG: "0"
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
+    volumes:
+      - static_data:/app/staticfiles
+      - media_data:/app/media
+    expose: ["8001"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: always
+
+  realtime:
+    image: ticketforge:latest
+    env_file: [.env]
+    command: ["realtime"]
+    environment:
+      SERVICE_ROLE: realtime
+      DJANGO_DEBUG: "0"
+    volumes:
+      - static_data:/app/staticfiles
+      - media_data:/app/media
+    expose: ["8002"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: always
+
+  worker:
+    image: ticketforge:latest
+    env_file: [.env]
+    command: ["worker"]
+    environment:
+      SERVICE_ROLE: worker
+      DJANGO_DEBUG: "0"
+      CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-4}
+    volumes:
+      - static_data:/app/staticfiles
+      - media_data:/app/media
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: always
+
+  beat:
+    image: ticketforge:latest
+    env_file: [.env]
+    command: ["beat"]
+    environment:
+      SERVICE_ROLE: beat
+      DJANGO_DEBUG: "0"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: always
+
+  # Point the Dokploy domain at this service, port 80. The proxied build
+  # serves plain HTTP on port 80 and trusts the proxy's forwarded headers.
+  nginx:
+    build:
+      context: ./deploy/nginx
+      args:
+        NGINX_MODE: proxied
+    expose: ["80"]
+    volumes:
+      - static_data:/static:ro
+      - media_data:/media:ro
+    # Listed explicitly so that the network Dokploy adds for its proxy is
+    # added next to this one rather than replacing it.
+    networks: [default]
+    depends_on:
+      - web
+      - api
+      - realtime
+    restart: always
+
+volumes:
+  mysql_data:
+  redis_data:
+  meili_data:
+  static_data:
+  media_data:

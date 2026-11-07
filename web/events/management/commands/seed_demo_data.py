@@ -111,8 +111,16 @@ class Command(BaseCommand):
             action="store_true",
             help="Move existing demo events to fresh evening dates and refresh their copy.",
         )
+        parser.add_argument(
+            "--if-empty",
+            action="store_true",
+            help="Do nothing when any event exists, so a deploy can run this on every start.",
+        )
 
     def handle(self, *args: Any, **options: Any) -> None:
+        if options["if_empty"] and Event.objects.exists():
+            self.stdout.write("Events already exist, so the demo data was not seeded.")
+            return
         rng = random.Random(options["seed"])
         organizer = self._organizer()
         venues = self._venues()

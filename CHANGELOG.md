@@ -11,6 +11,11 @@ All notable changes to this project are recorded here. The format follows [Keep 
 - Development tools: mypy 2.4, django-stubs 6.1, djangorestframework-stubs 3.18 and pytest-cov 7.
 - CI uses the current major versions of `actions/checkout`, `astral-sh/setup-uv`, `actions/upload-artifact`, `docker/setup-buildx-action` and `docker/build-push-action`.
 
+### Added
+
+- `docker-compose.dokploy.yml` for hosts where another proxy, such as Dokploy's Traefik, terminates HTTPS. nginx gets a `proxied` build mode for it that serves plain HTTP and takes the visitor's scheme and address from the proxy's forwarded headers. See "Deploying with Dokploy" in the operations guide.
+- `seed_demo_data --if-empty`, and `DEMO_SEED=1` to run it from the `migrate` job, so a public demo seeds itself once on first deploy.
+
 ### Fixed
 
 - Organizer and account API endpoints answer a JSON array or a bare value in the request body with a 400 error instead of crashing with a 500.

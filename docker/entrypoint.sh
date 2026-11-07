@@ -25,6 +25,10 @@ case "$role" in
     wait_for_mysql
     python manage.py migrate --noinput
     alembic -c api/alembic.ini upgrade head
+    # Public demos: fill an empty database with the demo dataset once.
+    if [ "${DEMO_SEED:-0}" = "1" ]; then
+      python manage.py seed_demo_data --if-empty --orders "${DEMO_SEED_ORDERS:-300}"
+    fi
     ;;
   web)
     python manage.py collectstatic --noinput
