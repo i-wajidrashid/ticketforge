@@ -105,7 +105,7 @@ Steps in the Dokploy dashboard:
    DEMO_SEED=1           # demo only
    ```
 
-4. Under **Domains**, add the host with service `nginx`, port `80`, HTTPS on and the Let's Encrypt certificate. Without a domain of your own yet, a name such as `tickets.203-0-113-10.sslip.io` resolves to the server address `203.0.113.10` through [sslip.io](https://sslip.io/) and can get a certificate the same way.
+4. Under **Domains**, add the host with service `nginx`, port `80`, HTTPS on and the Let's Encrypt certificate. Point the domain's DNS `A` record at the server first, so Let's Encrypt can verify it.
 5. **Deploy**, then follow the `migrate` container's log until it exits.
 
 To move to your own domain later, point its DNS `A` record at the server, change the host in **Domains** and in the four variables above, and deploy again.
