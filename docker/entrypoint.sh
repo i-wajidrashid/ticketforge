@@ -38,7 +38,7 @@ case "$role" in
   api)
     exec uvicorn api.app.main:app \
       --host 0.0.0.0 --port 8001 \
-      --workers "${UVICORN_WORKERS:-2}" \
+      --workers "${UVICORN_WORKERS:-4}" \
       --proxy-headers --forwarded-allow-ips='*'
     ;;
   realtime)

@@ -85,6 +85,27 @@ def test_process_and_reject_refund_tasks(seated_event, db_session, customer):
     assert rejected["status"] == "rejected"
 
 
+def test_a_refund_frees_its_seats_on_every_open_seat_map(
+    seated_event, db_session, customer, monkeypatch
+):
+    from api.app.services import notifications
+
+    order = make_paid_order(db_session, seated_event, customer)
+    refund = make_refund(db_session, order)
+    sent: list[tuple[int, list[dict]]] = []
+    monkeypatch.setattr(
+        notifications, "seat_updates", lambda event_id, seats: sent.append((event_id, seats))
+    )
+
+    tasks.process_refund.delay(refund.id, None)
+
+    ((event_id, seats),) = sent
+    assert event_id == seated_event.event.pk
+    assert [(seat["seat_id"], seat["status"]) for seat in seats] == [
+        (seated_event.seats[0].id, "available")
+    ]
+
+
 def test_cancel_event_refunds_fans_out(seated_event, db_session, customer):
     make_paid_order(db_session, seated_event, customer)
     result = tasks.cancel_event_refunds.delay(seated_event.event.pk).result
@@ -127,3 +148,100 @@ def test_send_refund_email(seated_event, db_session, customer):
     tasks.send_refund_email.delay(order.id)
     assert len(mail.outbox) == 1
     assert "refund" in mail.outbox[0].subject.lower()
+
+
+# ---------------------------------------------------------------------------
+# automatic sold-out
+# ---------------------------------------------------------------------------
+
+
+def _status(event) -> str:
+    event.refresh_from_db()
+    return str(event.status)
+
+
+def test_selling_the_last_ga_tickets_marks_the_event_sold_out(ga_event, db_session, customer):
+    ga_event.ticket_type.quantity_total = 3
+    ga_event.ticket_type.save(update_fields=["quantity_total"])
+
+    make_paid_order(db_session, ga_event, customer, quantity=2, key="first")
+    assert tasks.refresh_event_availability.delay(ga_event.event.pk).result == "unchanged"
+    assert _status(ga_event.event) == "published"
+
+    make_paid_order(db_session, ga_event, UserFactory(), quantity=1, key="last")
+    assert tasks.refresh_event_availability.delay(ga_event.event.pk).result == "sold_out"
+    assert _status(ga_event.event) == "sold_out"
+
+
+def test_held_stock_does_not_count_as_sold(ga_event, db_session, customer):
+    ga_event.ticket_type.quantity_total = 2
+    ga_event.ticket_type.save(update_fields=["quantity_total"])
+    holds.create_hold(
+        db_session,
+        user_id=customer.pk,
+        event_id=ga_event.event.pk,
+        ticket_type_id=ga_event.ticket_type.pk,
+        quantity=2,
+    )
+
+    assert tasks.refresh_event_availability.delay(ga_event.event.pk).result == "unchanged"
+    assert _status(ga_event.event) == "published"
+
+
+def test_selling_every_seat_marks_sold_out_and_a_refund_reopens_it(
+    seated_event, db_session, customer
+):
+    orders = [
+        make_paid_order(db_session, seated_event, UserFactory(), seat_index=i, key=f"seat{i}")
+        for i in range(len(seated_event.seats))
+    ]
+    tasks.refresh_event_availability.delay(seated_event.event.pk)
+    assert _status(seated_event.event) == "sold_out"
+
+    refund = make_refund(db_session, orders[0])
+    # process_refund enqueues the availability refresh itself (eager in tests).
+    tasks.process_refund.delay(refund.id, None)
+    assert _status(seated_event.event) == "on_sale"
+
+
+def test_paid_webhook_flips_sold_out_end_to_end(api_client, ga_event, customer_token):
+    ga_event.ticket_type.quantity_total = 1
+    ga_event.ticket_type.save(update_fields=["quantity_total"])
+    headers = {"Authorization": f"Bearer {customer_token}"}
+
+    hold = api_client.post(
+        "/api/v1/holds",
+        json={
+            "event_id": ga_event.event.pk,
+            "ticket_type_id": ga_event.ticket_type.pk,
+            "quantity": 1,
+        },
+        headers=headers,
+    )
+    assert hold.status_code == 201, hold.text
+    pay = api_client.post(
+        f"/api/v1/checkout/{hold.json()['id']}/pay",
+        headers={**headers, "Idempotency-Key": "sold-out-e2e"},
+    )
+    assert pay.status_code == 200, pay.text
+    done = api_client.post(
+        f"/api/v1/dev/simulate-payment/{pay.json()['order_id']}", headers=headers
+    )
+    assert done.status_code == 200, done.text
+
+    assert _status(ga_event.event) == "sold_out"
+    detail = api_client.get(f"/api/v1/events/{ga_event.event.slug}")
+    assert detail.json()["status"] == "sold_out"
+
+
+def test_availability_refresh_ignores_events_without_inventory():
+    from tests.factories import EventFactory
+
+    event = EventFactory()
+    assert tasks.refresh_event_availability.delay(event.pk).result == "no_inventory"
+
+
+def test_untouched_ga_stock_counts_as_unsold(ga_event):
+    # No hold has ever materialised the counter: the full quantity is unsold.
+    assert tasks.refresh_event_availability.delay(ga_event.event.pk).result == "unchanged"
+    assert _status(ga_event.event) == "published"

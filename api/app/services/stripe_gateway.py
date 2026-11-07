@@ -49,7 +49,7 @@ class PaymentGateway(Protocol):
 
 
 class FakeGateway:
-    """Deterministic ids derived from the idempotency key -- perfect for tests."""
+    """Deterministic ids derived from the idempotency key, which keeps tests repeatable."""
 
     def _digest(self, value: str) -> str:
         return hashlib.sha256(value.encode()).hexdigest()[:24]

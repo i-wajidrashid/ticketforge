@@ -1,4 +1,4 @@
-"""Seat/inventory holds -- the concurrency-critical core of the platform.
+"""Seat and inventory holds: the concurrency-critical core of the platform.
 
 Rules that make double selling impossible:
 1. every seat transition is a conditional UPDATE (rows affected must be 1);
@@ -32,7 +32,7 @@ from api.app.services.errors import (
     SeatUnavailable,
     SoldOut,
 )
-from api.app.services.inventory import ensure_event_seats, ensure_ga_inventory
+from api.app.services.inventory import ensure_event_seats, ensure_ga_inventory, seat_ticket_types
 from api.app.services.locks import named_lock
 
 
@@ -66,15 +66,16 @@ def _validate_window(ticket_type: core_repo.TicketTypeRow, now: datetime) -> Non
 def _seated_ticket_type(
     ticket_types: dict[int, core_repo.TicketTypeRow], ticket_type_id: int | None
 ) -> core_repo.TicketTypeRow:
-    if ticket_type_id is not None:
-        ticket_type = ticket_types.get(ticket_type_id)
-        if ticket_type is None:
-            raise EventNotSellable("That ticket type does not belong to this event.")
-        return ticket_type
-    seated = [ticket for ticket in ticket_types.values() if ticket.inventory_mode == "seated"]
-    if len(seated) == 1:
-        return seated[0]
-    raise InvalidQuantity("ticket_type_id is required when the event has multiple seated types.")
+    """Fallback for seats whose section maps to no ticket type (see
+    ``inventory.seat_ticket_types``): the buyer must name the type."""
+    if ticket_type_id is None:
+        raise InvalidQuantity(
+            "ticket_type_id is required when the event has multiple seated types."
+        )
+    ticket_type = ticket_types.get(ticket_type_id)
+    if ticket_type is None or ticket_type.inventory_mode != "seated":
+        raise EventNotSellable("That ticket type does not belong to this event.")
+    return ticket_type
 
 
 def _active_holds(session: Session, user_id: int, event_id: int) -> list[Hold]:
@@ -175,15 +176,33 @@ def create_hold(
             if quantity is not None:
                 raise InvalidQuantity("Provide either seats or a quantity, not both.")
             seat_ids = sorted({int(seat_id) for seat_id in seat_ids})
-            ticket_type = _seated_ticket_type(ticket_types, ticket_type_id)
-            _validate_window(ticket_type, now)
-            if len(seat_ids) > ticket_type.max_per_order:
-                raise InvalidQuantity(f"At most {ticket_type.max_per_order} seats per order.")
-
-            known = {seat.id for seat in core_repo.seats_for_event(event_id)}
+            venue_seats = core_repo.seats_for_event(event_id)
+            known = {seat.id for seat in venue_seats}
             unknown = [seat_id for seat_id in seat_ids if seat_id not in known]
             if unknown:
                 raise SeatUnavailable("Some of those seats do not exist.", {"seat_ids": unknown})
+
+            # Price every seat on the server; a client-supplied type is only a
+            # fallback for seats whose section maps to no ticket type.
+            pricing = seat_ticket_types(venue_seats, ticket_types.values())
+            seat_types: dict[int, core_repo.TicketTypeRow] = {}
+            for seat_id in seat_ids:
+                mapped = pricing.get(seat_id)
+                seat_types[seat_id] = (
+                    ticket_types[mapped]
+                    if mapped is not None
+                    else _seated_ticket_type(ticket_types, ticket_type_id)
+                )
+            per_type: dict[int, int] = {}
+            for chosen in seat_types.values():
+                per_type[chosen.id] = per_type.get(chosen.id, 0) + 1
+            for type_id, count in per_type.items():
+                chosen = ticket_types[type_id]
+                _validate_window(chosen, now)
+                if count > chosen.max_per_order:
+                    raise InvalidQuantity(
+                        f"At most {chosen.max_per_order} {chosen.name} seats per order."
+                    )
 
             hold = Hold(
                 user_id=user_id,
@@ -213,7 +232,7 @@ def create_hold(
                     HoldItem(
                         hold_id=hold.id,
                         event_seat_id=_event_seat_pk(session, event_id, seat_id),
-                        ticket_type_id=ticket_type.id,
+                        ticket_type_id=seat_types[seat_id].id,
                         quantity=1,
                     )
                 )
@@ -358,18 +377,16 @@ def expire_holds(now: datetime | None = None) -> list[dict[str, Any]]:
     moment = now or utcnow()
     released: list[dict[str, Any]] = []
     with session_scope() as session:
-        hold_ids = list(
-            session.scalars(
-                select(Hold.id)
-                .where(Hold.status == "active", Hold.expires_at <= moment)
-                .with_for_update(skip_locked=True)
-                .limit(500)
-            ).all()
-        )
-        for hold_id in hold_ids:
-            hold = session.get(Hold, hold_id)
-            if hold is None or hold.status != "active":
-                continue
+        # Rows come back locked FOR UPDATE, so their status cannot change under
+        # us; SKIP LOCKED lets a second sweeper (or a paying customer) proceed
+        # on other rows instead of queueing behind this batch.
+        due = session.scalars(
+            select(Hold)
+            .where(Hold.status == "active", Hold.expires_at <= moment)
+            .with_for_update(skip_locked=True)
+            .limit(500)
+        ).all()
+        for hold in due:
             released.append(release_hold(session, hold, status="expired"))
     return released
 

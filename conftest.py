@@ -1,8 +1,8 @@
 """Shared pytest setup.
 
 Test topology mirrors production:
-* ``test_core``     -- created by pytest-django, read by both services;
-* ``test_checkout`` -- created here and migrated with Alembic.
+* ``test_core``: created by pytest-django, read by both services;
+* ``test_checkout``: created here and migrated with Alembic.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ os.environ.setdefault("CELERY_TASK_ALWAYS_EAGER", "1")
 os.environ.setdefault("SEARCH_ENABLED", "0")
 os.environ.setdefault("HOLD_RATE_LIMIT_PER_MINUTE", "1000")
 os.environ.setdefault("STRIPE_GATEWAY", "fake")
+os.environ.setdefault("CATALOGUE_CACHE_SECONDS", "0")  # tests create events and read them back
 # Separate logical Redis DB + Meilisearch index so the test suite can run
 # while the development stack is up without sharing state.
 os.environ.setdefault("REDIS_URL", "redis://127.0.0.1:6379/5")

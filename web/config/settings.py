@@ -5,11 +5,34 @@ from __future__ import annotations
 from pathlib import Path
 
 from common.env import env, env_bool, env_int, env_list
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 SECRET_KEY = env("DJANGO_SECRET_KEY", "insecure-dev-key")
-DEBUG = env_bool("DJANGO_DEBUG", True)
+# Off unless asked for: a missing variable must never expose debug pages.
+DEBUG = env_bool("DJANGO_DEBUG", False)
+
+# The development values shipped in .env.example. Outside DEBUG, refuse to
+# start with any of them (or with anything short enough to guess), because
+# these secrets sign sessions, API tokens and the QR codes on tickets.
+_DEV_SECRETS = {
+    "insecure-dev-key",
+    "dev-only-change-me-0123456789abcdefghijklmnop",
+    "dev-jwt-secret-change-me-please-32bytes",
+    "dev-qr-secret-change-me-please-32bytes",
+}
+if not DEBUG:
+    for _name, _value in (
+        ("DJANGO_SECRET_KEY", SECRET_KEY),
+        ("JWT_SECRET", env("JWT_SECRET", "dev-jwt-secret-change-me-please-32bytes")),
+        ("QR_SECRET", env("QR_SECRET", "dev-qr-secret-change-me-please-32bytes")),
+    ):
+        if _value in _DEV_SECRETS or len(_value) < 32:
+            raise ImproperlyConfigured(
+                f"{_name} is a development value or shorter than 32 characters. "
+                "Set a random secret, or DJANGO_DEBUG=1 for local development."
+            )
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", ["localhost", "127.0.0.1", "testserver"])
 
 SITE_ORIGIN = env("SITE_ORIGIN", "https://localhost")
@@ -47,6 +70,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "web.config.csp.ContentSecurityPolicyMiddleware",
 ]
 
 ROOT_URLCONF = "web.config.urls"
@@ -72,7 +96,7 @@ TEMPLATES = [
 ]
 
 # ---------------------------------------------------------------------------
-# Database (core) -- Django owns this schema through migrations.
+# Database (core). Django owns this schema through migrations.
 # READ COMMITTED matches the short, row-locking transactions the checkout side
 # relies on and avoids surprising REPEATABLE READ snapshot behaviour.
 # ---------------------------------------------------------------------------
@@ -111,7 +135,8 @@ PASSWORD_HASHERS = [
 ]
 
 LANGUAGE_CODE = "en-us"
-TIME_ZONE = "UTC"
+# Stored in UTC (USE_TZ); rendered in the venues' local time.
+TIME_ZONE = env("TIME_ZONE", "Asia/Karachi")
 USE_I18N = True
 USE_TZ = True
 
@@ -154,6 +179,8 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_TASK_TIME_LIMIT = 300
 CELERY_TASK_SOFT_TIME_LIMIT = 240
 CELERY_TASK_DEFAULT_QUEUE = "default"
+# crontab() entries below run in venue-local time (e.g. reminders at 09:00 Karachi).
+CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_ROUTES = {
     "worker.tasks.send_*": {"queue": "emails"},
     "worker.tasks.index_event": {"queue": "search"},
@@ -229,6 +256,29 @@ MEILI_INDEX = env("MEILI_INDEX", "events")
 
 STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY", "sk_test_xxx")
 STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET", "whsec_xxx")
+STRIPE_PUBLISHABLE_KEY = env("STRIPE_PUBLISHABLE_KEY", "pk_test_xxx")
+# Mirrors api.app.services.stripe_gateway.get_gateway(): real Stripe only when a
+# real test/live key is configured. The browser loads Stripe.js only then;
+# otherwise checkout completes through the local payment simulator.
+STRIPE_LIVE = env("STRIPE_GATEWAY", "auto").lower() == "live" or (
+    STRIPE_SECRET_KEY.startswith("sk_test_") and STRIPE_SECRET_KEY != "sk_test_xxx"
+)
+STRIPE_BROWSER_KEY = (
+    STRIPE_PUBLISHABLE_KEY
+    if STRIPE_LIVE
+    and STRIPE_PUBLISHABLE_KEY.startswith("pk_")
+    and "xxx" not in STRIPE_PUBLISHABLE_KEY
+    else ""
+)
+# Without real keys, "auto" falls back to the fake gateway, which accepts
+# unsigned webhooks and exposes the payment simulator: checkout would be free.
+# Outside DEBUG that has to be asked for by name, never reached by omission.
+if not DEBUG and not STRIPE_LIVE and env("STRIPE_GATEWAY", "auto").lower() != "fake":
+    raise ImproperlyConfigured(
+        "No real Stripe key is configured, so payments would run on the fake gateway "
+        "and tickets would be free. Set STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET, "
+        "or STRIPE_GATEWAY=fake for a demo where that is intended."
+    )
 
 CHECKOUT_DATABASE = env("CHECKOUT_DATABASE", "checkout")
 

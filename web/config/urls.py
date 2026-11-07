@@ -15,7 +15,7 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 
 def health(request: HttpRequest) -> JsonResponse:
-    """Liveness for the Django container -- intentionally does not touch MySQL."""
+    """Liveness for the Django container. It deliberately does not touch MySQL."""
     return JsonResponse({"status": "ok", "service": "web"})
 
 
@@ -26,6 +26,7 @@ urlpatterns = [
     path("org/api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("org/api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="api-docs"),
     path("org/api/v1/", include("web.organizers.urls")),
+    path("org/", include("web.organizers.page_urls")),
     path("", include("web.events.urls")),
 ]
 

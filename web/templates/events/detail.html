@@ -1,113 +1,142 @@
 {% extends "base.html" %}
-{% block title %}{{ event.title }} — TicketForge{% endblock %}
+{% load static tf %}
+{% block title %}{{ event.title }}, {{ event.starts_at|date:"j M" }} | TicketForge{% endblock %}
+{% block description %}{{ event.title }} at {{ event.venue.name }}, {{ event.venue.city }} on {{ event.starts_at|date:"l j F" }}. Tickets from {{ event.min_price_cents|money }}.{% endblock %}
+{% block body_class %}has-checkout-bar{% endblock %}
 
 {% block content %}
-{% if event.status == "cancelled" %}
-  <div class="flash flash-error">This event has been cancelled. Existing orders are being refunded automatically.</div>
-{% endif %}
+<a class="breadcrumb" href="{% url 'events:index' %}">{% icon "back" %} All events</a>
 
-<article class="detail">
-  <header class="detail-head">
-    <p class="eyebrow">{{ event.starts_at|date:"l j F · H:i" }} UTC · {{ event.venue.name }}, {{ event.venue.city }}</p>
-    <h1>{{ event.title }}</h1>
-    <p class="lede">{{ event.description|default:"Doors open shortly before the start time."|linebreaksbr }}</p>
-    <div class="detail-facts">
-      <span class="pill">{{ event.get_category_display }}</span>
-      <span class="pill">{{ event.venue.name }}</span>
-      <span class="pill">{{ event.get_status_display }}</span>
-    </div>
-  </header>
-
-  <div class="detail-grid">
-    <section class="panel">
-      <h2>Choose your tickets</h2>
-
-      {% if not user.is_authenticated %}
-        <p class="muted">Please <a href="{% url 'accounts:login' %}?next={{ request.path|urlencode }}">log in</a> to hold seats.</p>
-      {% elif not is_verified %}
-        <div class="flash flash-warning">
-          Verify your email to buy tickets. <a href="{% url 'accounts:account' %}">Resend the link</a>.
-        </div>
-      {% endif %}
-
-      {% if seated %}
-        {% if ticket_types|length > 1 %}
-          <label class="field seat-type-picker">
-            <span>Ticket type for your seats</span>
-            <select id="seat-ticket-type">
-              {% for ticket_type in ticket_types %}
-                {% if ticket_type.inventory_mode == "seated" %}
-                  <option value="{{ ticket_type.id }}">{{ ticket_type.name }} — ${{ ticket_type.price_display }}</option>
-                {% endif %}
-              {% endfor %}
-            </select>
-          </label>
-        {% endif %}
-        <div id="seat-map" class="seat-map" aria-live="polite">
-          <p class="muted">Loading the seat map…</p>
-        </div>
-        <div class="seat-legend">
-          <span><i class="dot dot-available"></i> Available</span>
-          <span><i class="dot dot-selected"></i> Selected</span>
-          <span><i class="dot dot-held"></i> On hold</span>
-          <span><i class="dot dot-sold"></i> Sold</span>
-        </div>
-        <button id="buy-seats" class="button" type="button" disabled>Hold selected seats</button>
-      {% endif %}
-
-      <div class="ticket-types">
-        {% for ticket_type in ticket_types %}
-          <div class="ticket-type">
-            <div>
-              <strong>{{ ticket_type.name }}</strong>
-              <p class="muted">
-                ${{ ticket_type.price_display }} · {{ ticket_type.inventory_mode|capfirst }}
-                · max {{ ticket_type.max_per_order }} per order
-              </p>
-            </div>
-            {% if ticket_type.inventory_mode == "ga" %}
-              <button class="button button-small add-ga" type="button"
-                      data-ticket-type="{{ ticket_type.id }}"
-                      data-price="{{ ticket_type.price_cents }}"
-                      {% if not is_verified %}disabled{% endif %}>
-                Hold 1 ticket
-              </button>
-            {% else %}
-              <span class="pill">Pick seats above</span>
-            {% endif %}
-          </div>
-        {% empty %}
-          <p class="muted">Tickets for this event are not configured yet.</p>
-        {% endfor %}
+<div class="event-layout">
+  <aside class="event-aside">
+    {% if sale_state == "sold_out" %}
+      {% include "components/poster.html" with event=event labelled=True flag="Sold out" %}
+    {% else %}
+      {% include "components/poster.html" with event=event labelled=True %}
+    {% endif %}
+    <div class="event-facts">
+      <div>
+        {% icon "calendar" %}
+        <p><strong>{{ event.starts_at|date:"l j F Y" }}</strong>{{ event.starts_at|date:"H:i" }} to {{ event.ends_at|date:"H:i" }} {{ event.starts_at|date:"T" }}</p>
       </div>
+      <div>
+        {% icon "pin" %}
+        <p><strong>{{ event.venue.name }}</strong>{{ event.venue.address }}, {{ event.venue.city }}</p>
+      </div>
+      <div>
+        {% icon "organizer" %}
+        <p><strong>{{ event.organizer.name }}</strong>Organizer</p>
+      </div>
+    </div>
+  </aside>
 
-      <div id="hold-panel" class="hold-panel" hidden>
-        <div class="hold-head">
-          <h3>Your hold</h3>
-          <span id="hold-timer" class="countdown">10:00</span>
+  <div>
+    <header class="event-head">
+      <div class="cluster">
+        <span class="tag">{{ event.get_category_display }}</span>
+        {% if sale_state == "open" %}<span class="tag tag-ok tag-dot">On sale</span>
+        {% elif sale_state == "sold_out" %}<span class="tag tag-solid">Sold out</span>
+        {% else %}<span class="tag">Sales closed</span>{% endif %}
+      </div>
+      <h1>{{ event.title }}</h1>
+      <p class="event-when">{{ event.starts_at|date:"D j M, H:i" }}</p>
+      <p class="event-where">{{ event.venue.name }}, {{ event.venue.city }}</p>
+      {% if event.description %}<div class="event-description">{{ event.description|linebreaks }}</div>{% endif %}
+    </header>
+
+    <section class="tickets" id="tickets" aria-labelledby="tickets-title">
+      <h2 class="section-title" id="tickets-title">Tickets</h2>
+
+      <div class="stack">
+        {% if sale_state == "sold_out" %}
+          <div class="notice notice-warning">{% icon "info" %}<p>Every ticket has been sold. If someone returns theirs it goes straight back on sale here, so check back closer to the date.</p></div>
+        {% elif sale_state != "open" %}
+          <div class="notice notice-warning">{% icon "info" %}<p>Ticket sales for this event have closed.</p></div>
+        {% elif not user.is_authenticated %}
+          <div class="notice notice-info">{% icon "info" %}<p>Browse freely. <a href="{% url 'accounts:login' %}?next={{ request.path|urlencode }}">Log in</a> or <a href="{% url 'accounts:signup' %}">create an account</a> when you’re ready to hold tickets.</p></div>
+        {% elif not is_verified %}
+          <div class="notice notice-warning">{% icon "alert" %}<p>Confirm your email address to buy tickets. <a href="{% url 'accounts:account' %}">Resend the confirmation link</a></p></div>
+        {% endif %}
+
+        {% if seated %}
+          <div class="seatmap" id="seat-map" aria-label="Seat map">
+            <div class="seat-prices" id="seat-prices">
+              {% for ticket_type in seated_types %}<span><strong>{{ ticket_type.name }}</strong> {{ ticket_type.price_cents|money:ticket_type.currency }}</span>{% endfor %}
+            </div>
+            <div class="stage" aria-hidden="true">Stage</div>
+            <div class="seatmap-scroll" id="seat-sections" aria-live="polite" aria-busy="true">
+              <div class="seat-skeleton" aria-label="Loading seats"><span></span><span></span><span></span><span></span></div>
+            </div>
+            <p class="seatmap-hint muted small">Swipe sideways to see every seat.</p>
+            <div class="seat-legend" aria-hidden="true">
+              <span><i class="seat"></i> Available</span>
+              <span><i class="seat is-selected"></i> Your selection</span>
+              <span><i class="seat is-mine"></i> Held for you</span>
+              <span><i class="seat is-held"></i> On hold</span>
+              <span><i class="seat is-sold"></i> Sold</span>
+            </div>
+          </div>
+        {% endif %}
+
+        {% if ga_rows %}
+          <fieldset class="ticket-options" id="ga-options" {% if sale_state != "open" %}disabled{% endif %}>
+            <legend class="visually-hidden">General admission tickets</legend>
+            {% for row in ga_rows %}
+              <div class="ticket-option{% if row.sold_out %} is-unavailable{% endif %}" data-ticket-type="{{ row.type.pk }}" data-max="{{ row.max }}">
+                <div>
+                  <p class="ticket-name">{{ row.type.name }}</p>
+                  <p class="ticket-sub">
+                    {% if row.sold_out %}Sold out
+                    {% elif row.low %}Only {{ row.remaining }} left
+                    {% else %}Up to {{ row.type.max_per_order }} per order{% endif %}
+                  </p>
+                </div>
+                <div class="cluster">
+                  <span class="ticket-price">{{ row.type.price_cents|money:row.type.currency }}</span>
+                  {% if not row.sold_out %}
+                    <div class="stepper" role="group" aria-label="{{ row.type.name }} quantity">
+                      <button type="button" data-step="-1" aria-label="Remove one {{ row.type.name }} ticket" disabled>&minus;</button>
+                      <output aria-live="polite">0</output>
+                      <button type="button" data-step="1" aria-label="Add one {{ row.type.name }} ticket" {% if sale_state != "open" %}disabled{% endif %}>+</button>
+                    </div>
+                  {% endif %}
+                </div>
+              </div>
+            {% endfor %}
+          </fieldset>
+        {% endif %}
+
+        {% if not ticket_types %}
+          <p class="muted">Tickets for this event haven’t been released yet.</p>
+        {% endif %}
+
+        <div id="payment-panel" class="panel" hidden>
+          <div class="panel-head"><h3 class="panel-title">Card details</h3><span class="muted small">Processed by Stripe</span></div>
+          <div id="payment-element"></div>
         </div>
-        <ul id="hold-items" class="hold-items"></ul>
-        <div class="hold-foot">
-          <strong id="hold-total">$0.00</strong>
-          <button id="pay-button" class="button" type="button">Pay now</button>
-        </div>
-        <p class="muted small">Seats are reserved for 10 minutes. Payment is simulated locally (Stripe test mode).</p>
       </div>
     </section>
-
-    <aside class="panel aside">
-      <h2>Event details</h2>
-      <dl class="facts">
-        <dt>Starts</dt><dd>{{ event.starts_at|date:"D j M Y, H:i" }} UTC</dd>
-        <dt>Ends</dt><dd>{{ event.ends_at|date:"D j M Y, H:i" }} UTC</dd>
-        <dt>Venue</dt><dd>{{ event.venue.name }}<br>{{ event.venue.address }}, {{ event.venue.city }}</dd>
-        <dt>Organizer</dt><dd>{{ event.organizer.name }}</dd>
-        <dt>Capacity</dt><dd>{{ event.venue.capacity }} people</dd>
-      </dl>
-      <p class="muted small">Every ticket carries a signed QR code. A second scan is rejected and reports the first scan time.</p>
-    </aside>
   </div>
-</article>
+</div>
+
+<div class="checkout-bar" id="checkout-bar" role="region" aria-label="Your order">
+  <div class="wrap">
+    <div class="checkout-summary">
+      <strong id="cb-title">Choose tickets</strong>
+      <span id="cb-detail"></span>
+    </div>
+    <div class="checkout-timer" id="cb-timer" hidden>
+      <span class="clock" id="cb-clock" role="timer" aria-label="Time left to pay">10:00</span>
+      <small>left to pay</small>
+    </div>
+    <div class="checkout-actions">
+      <button class="btn btn-ghost-dark" type="button" id="cb-secondary" hidden>Release</button>
+      <button class="btn btn-on-dark btn-lg" type="button" id="cb-primary">Hold tickets</button>
+    </div>
+  </div>
+</div>
 
 {{ tf_config|json_script:"tf-config" }}
 {% endblock %}
+
+{% block scripts %}<script src="{% static 'js/event.js' %}?v={{ asset_version }}" defer></script>{% endblock %}

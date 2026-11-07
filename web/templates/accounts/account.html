@@ -1,63 +1,50 @@
 {% extends "base.html" %}
-{% block title %}Your account — TicketForge{% endblock %}
+{% load static tf %}
+{% block title %}My tickets | TicketForge{% endblock %}
+
 {% block content %}
-<section class="account">
-  <header class="account-head">
-    <div>
-      <p class="eyebrow">Signed in as</p>
-      <h1>{{ user.email }}</h1>
-    </div>
-    {% if user.is_verified %}
-      <span class="pill pill-ok">Email verified</span>
-    {% else %}
-      <form method="post" action="{% url 'accounts:resend-verification' %}">
-        {% csrf_token %}
-        <button class="button button-small" type="submit">Resend verification email</button>
-      </form>
-    {% endif %}
-  </header>
-
-  {% if not user.is_verified %}
-    <div class="flash flash-warning">
-      Check Mailpit at <a href="http://localhost:8025" target="_blank" rel="noreferrer">localhost:8025</a>
-      for your verification link. Buying tickets unlocks after verification.
-    </div>
-  {% endif %}
-
-  <h2>Your tickets</h2>
-  <div class="ticket-list">
-    {% for ticket in tickets %}
-      <div class="ticket-row">
-        <div>
-          <strong>Ticket {{ ticket.id|slice:":8" }}</strong>
-          <p class="muted small">Order {{ ticket.order_id|slice:":8" }} · {{ ticket.status|capfirst }}</p>
-        </div>
-        {% if ticket.status == "valid" or ticket.status == "checked_in" %}
-          <a class="button button-small button-ghost" href="{% url 'accounts:ticket-pdf' ticket.id %}">Download PDF</a>
-        {% else %}
-          <span class="pill">{{ ticket.status|capfirst }}</span>
-        {% endif %}
-      </div>
-    {% empty %}
-      <p class="muted">No tickets yet. <a href="{% url 'events:index' %}">Browse events</a>.</p>
-    {% endfor %}
+<header class="account-head">
+  <div>
+    <h1 class="page-title">My tickets</h1>
+    <p class="muted">Signed in as {{ user.email }}</p>
   </div>
+  {% if user.is_verified %}
+    <span class="tag tag-ok">Email confirmed</span>
+  {% else %}
+    <form method="post" action="{% url 'accounts:resend-verification' %}">
+      {% csrf_token %}
+      <button class="btn btn-secondary btn-sm" type="submit">Resend confirmation email</button>
+    </form>
+  {% endif %}
+</header>
 
-  <h2>Your orders</h2>
-  <table class="table">
-    <thead><tr><th>Order</th><th>Status</th><th>Total</th><th>Placed</th></tr></thead>
-    <tbody>
-      {% for order in orders %}
-        <tr>
-          <td class="mono">{{ order.id|slice:":8" }}</td>
-          <td><span class="pill">{{ order.status|capfirst }}</span></td>
-          <td>${{ order.total_cents|floatformat:0 }}</td>
-          <td class="muted">{{ order.created_at|date:"j M Y, H:i" }}</td>
-        </tr>
-      {% empty %}
-        <tr><td colspan="4" class="muted">No orders yet.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
+{% if not user.is_verified %}
+  <div class="notice notice-warning space-after">{% icon "alert" %}<p>Confirm your email address to buy tickets. We sent a link to <strong>{{ user.email }}</strong>.{% if dev_hints %} Running locally? It’s in Mailpit at <a href="http://localhost:8025" target="_blank" rel="noreferrer">localhost:8025</a>.{% endif %}</p></div>
+{% endif %}
+
+<div class="account-sections">
+  <section aria-labelledby="upcoming-title">
+    <div class="month-head"><h2 class="section-title" id="upcoming-title">Coming up</h2></div>
+    {% if upcoming %}
+      <ul class="order-list">{% for card in upcoming %}{% include "accounts/_order_card.html" %}{% endfor %}</ul>
+    {% else %}
+      <div class="empty-state">
+        <h2>No tickets yet</h2>
+        <p class="muted">Tickets you buy show up here with a downloadable PDF for each one.</p>
+        <a class="btn" href="{% url 'events:index' %}">Find an event</a>
+      </div>
+    {% endif %}
+  </section>
+
+  {% if past %}
+    <section aria-labelledby="past-title">
+      <div class="month-head"><h2 class="section-title" id="past-title">Past events</h2></div>
+      <ul class="order-list">{% for card in past %}{% include "accounts/_order_card.html" %}{% endfor %}</ul>
+    </section>
+  {% endif %}
+</div>
+
+{{ account_config|json_script:"tf-account" }}
 {% endblock %}
+
+{% block scripts %}<script src="{% static 'js/account.js' %}?v={{ asset_version }}" defer></script>{% endblock %}

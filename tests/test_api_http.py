@@ -144,3 +144,14 @@ def test_readiness_reports_both_dependencies(api_client):
     ready = api_client.get("/api/v1/ready")
     assert ready.status_code == 200
     assert ready.json()["checks"] == {"mysql": "ok", "redis": "ok"}
+
+
+def test_unknown_routes_and_methods_use_the_error_envelope(api_client):
+    missing = api_client.get("/api/v1/no-such-thing")
+    assert missing.status_code == 404
+    assert missing.json() == {"error": {"code": "NOT_FOUND", "message": "Not Found", "details": {}}}
+
+    wrong_method = api_client.put("/api/v1/health")
+    assert wrong_method.status_code == 405
+    assert wrong_method.json()["error"]["code"] == "METHOD_NOT_ALLOWED"
+    assert "GET" in wrong_method.headers["allow"]

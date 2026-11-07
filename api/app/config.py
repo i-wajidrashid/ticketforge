@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     qr_secret: str = "dev-qr-secret-change-me-please-32bytes"
 
     redis_url: str = "redis://127.0.0.1:6379/0"
+    # Timestamps are stored in UTC; tickets and emails show venue-local time.
+    time_zone: str = "Asia/Karachi"
     stripe_secret_key: str = "sk_test_xxx"
     stripe_webhook_secret: str = "whsec_xxx"
     stripe_gateway: str = "auto"
@@ -33,6 +35,12 @@ class Settings(BaseSettings):
     max_active_holds_per_event: int = 1
 
     site_origin: str = "https://localhost"
+
+    # Seconds the public event list and event pages may be served from memory.
+    # Every visitor sees the same catalogue, so during an on-sale rush this
+    # turns thousands of identical queries into one per worker per window.
+    # Seat maps and checkout are never cached. 0 disables caching.
+    catalogue_cache_seconds: float = 5.0
 
     @property
     def checkout_url(self) -> str:

@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% load tf %}
+{% block title %}Dashboard | TicketForge{% endblock %}
+
+{% block content %}
+<header class="dash-head">
+  <div>
+    <h1 class="page-title">Dashboard</h1>
+    <p class="muted">Sales across every event you run. Figures update as orders are paid.</p>
+  </div>
+  <a class="btn btn-secondary btn-sm" href="/org/api/docs/">Organizer API</a>
+</header>
+
+<section class="kpis" aria-label="Totals">
+  <div class="kpi"><span class="kpi-label">Revenue</span><span class="kpi-value">{{ totals.revenue_cents|money }}</span><span class="kpi-sub">From paid orders. Fully refunded orders are left out.</span></div>
+  <div class="kpi"><span class="kpi-label">Tickets sold</span><span class="kpi-value">{{ totals.tickets_sold }}</span><span class="kpi-sub">Valid and checked-in tickets</span></div>
+  <div class="kpi"><span class="kpi-label">Upcoming events</span><span class="kpi-value">{{ totals.upcoming }}</span><span class="kpi-sub">Including drafts</span></div>
+  <div class="kpi"><span class="kpi-label">Refund requests</span><span class="kpi-value">{{ totals.pending_refunds }}</span><span class="kpi-sub">{% if totals.pending_refunds %}Waiting for your decision{% else %}Nothing to review{% endif %}</span></div>
+</section>
+
+{% if pending %}
+  <section class="panel space-after" aria-labelledby="pending-title">
+    <div class="panel-head"><h2 class="panel-title" id="pending-title">Refund requests to review</h2></div>
+    <ul class="row-list">
+      {% for refund in pending %}
+        <li>
+          <span><strong>{{ refund.amount_cents|money:refund.currency }}</strong> <span class="muted">requested {{ refund.created_at|ago }}{% if refund.reason %}: “{{ refund.reason }}”{% endif %}</span></span>
+          <a class="btn btn-sm btn-secondary" href="{% url 'organizer:event' refund.event_id %}#refunds">Review</a>
+        </li>
+      {% endfor %}
+    </ul>
+  </section>
+{% endif %}
+
+<section aria-labelledby="upcoming-title">
+  <div class="month-head"><h2 class="section-title" id="upcoming-title">Upcoming</h2></div>
+  {% if upcoming %}
+    {% include "organizers/_event_table.html" with rows=upcoming %}
+  {% else %}
+    <div class="empty-state">
+      <h2>No upcoming events</h2>
+      <p class="muted">Create events through the <a href="{% url 'api-docs' %}">organizer API</a>. They appear here as drafts until you publish them.</p>
+    </div>
+  {% endif %}
+</section>
+
+{% if past %}
+  <section class="space-before" aria-labelledby="past-title">
+    <div class="month-head"><h2 class="section-title" id="past-title">Past</h2></div>
+    {% include "organizers/_event_table.html" with rows=past %}
+  </section>
+{% endif %}
+{% endblock %}

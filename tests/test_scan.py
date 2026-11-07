@@ -58,3 +58,28 @@ def test_bad_qr_token_is_invalid(seated_event, db_session, customer):
     StaffAssignmentFactory(user=staff, event=seated_event.event)
     with pytest.raises(TicketInvalid):
         tickets.scan_ticket(db_session, qr_token="deadbeef.not-a-signature", staff_user_id=staff.pk)
+
+
+def test_the_events_own_organizer_can_scan(seated_event, db_session, customer):
+    ticket = _ticket_for(db_session, seated_event, customer)
+    result = tickets.scan_ticket(
+        db_session, qr_token=ticket.qr_token, staff_user_id=seated_event.organizer_user.pk
+    )
+    assert result["result"] == "valid"
+
+
+def test_another_organizer_cannot_scan(seated_event, db_session, customer):
+    from tests.factories import OrganizerFactory
+
+    ticket = _ticket_for(db_session, seated_event, customer)
+    with pytest.raises(StaffNotAssigned):
+        tickets.scan_ticket(
+            db_session, qr_token=ticket.qr_token, staff_user_id=OrganizerFactory().user.pk
+        )
+
+
+def test_admins_can_scan_any_event(seated_event, db_session, customer):
+    admin = UserFactory(role="admin")
+    ticket = _ticket_for(db_session, seated_event, customer)
+    result = tickets.scan_ticket(db_session, qr_token=ticket.qr_token, staff_user_id=admin.pk)
+    assert result["result"] == "valid"

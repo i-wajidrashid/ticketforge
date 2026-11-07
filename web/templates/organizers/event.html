@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% load static tf %}
+{% block title %}{{ event.title }} sales | TicketForge{% endblock %}
+
+{% block content %}
+<a class="breadcrumb" href="{% url 'organizer:dashboard' %}">{% icon "back" %} Dashboard</a>
+
+<header class="dash-head">
+  <div class="dash-identity">
+    {% include "components/poster.html" with event=event size="thumb" %}
+    <div>
+      <div class="cluster">{% include "organizers/_status.html" with state=event.status_display %}<span class="muted small">{{ event.starts_at|date:"l j F Y, H:i" }}</span></div>
+      <h1 class="page-title">{{ event.title }}</h1>
+      <p class="muted">{{ event.venue.name }}, {{ event.venue.city }}</p>
+    </div>
+  </div>
+  <div class="cluster">
+    {% if event.status != "draft" and event.status != "cancelled" %}
+      <a class="btn btn-secondary btn-sm" href="{% url 'events:detail' event.slug %}">View event page</a>
+    {% endif %}
+    {% if can_publish %}
+      <form method="post" action="{% url 'organizer:publish' event.pk %}">{% csrf_token %}<button class="btn btn-sm" type="submit">Publish</button></form>
+    {% endif %}
+  </div>
+</header>
+
+<section class="kpis" aria-label="Sales summary">
+  <div class="kpi" data-kpi="tickets">
+    <span class="kpi-label">Tickets sold</span>
+    <span class="kpi-value" data-value>{{ sales.tickets_sold }}</span>
+    <span class="kpi-sub">of {{ total_capacity }} available</span>
+  </div>
+  <div class="kpi" data-kpi="revenue">
+    <span class="kpi-label">Revenue</span>
+    <span class="kpi-value" data-value>{{ sales.revenue_cents|money }}</span>
+    <span class="kpi-sub">{{ sales.paid_orders }} paid order{{ sales.paid_orders|pluralize }}</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Checked in</span>
+    <span class="kpi-value">{{ sales.check_in_rate|percent }}</span>
+    <span class="kpi-sub">{{ sales.checked_in }} of {{ sales.tickets_sold }} ticket holders</span>
+  </div>
+  <div class="kpi" data-kpi="remaining">
+    <span class="kpi-label">Still for sale</span>
+    <span class="kpi-value" data-value>{{ remaining }}</span>
+    <span class="kpi-sub">Seats and tickets not yet sold</span>
+  </div>
+</section>
+
+<div class="dash-grid">
+  <div class="dash-col">
+    <section class="panel" aria-labelledby="chart-title">
+      <div class="panel-head">
+        <h2 class="panel-title" id="chart-title">Revenue per day</h2>
+        {% if chart %}<span class="muted small">{{ chart.total_cents|money }} over {{ chart.bars|length }} day{{ chart.bars|length|pluralize }}</span>{% endif %}
+      </div>
+      {% if chart %}
+        <div class="chart-wrap">
+        <svg class="chart" id="sales-chart" viewBox="0 0 {{ chart.width }} {{ chart.height }}" role="img" aria-labelledby="chart-title chart-desc">
+          <desc id="chart-desc">Bar chart of revenue per day. The same figures are in the table below the chart.</desc>
+          {% for line in chart.gridlines %}
+            <line class="grid-line" x1="{{ chart.plot_left }}" x2="{{ chart.plot_right }}" y1="{{ line.y|floatformat:1 }}" y2="{{ line.y|floatformat:1 }}"></line>
+            <text class="axis-label" x="{{ chart.plot_left|add:'-8' }}" y="{{ line.y|floatformat:1 }}" text-anchor="end" dominant-baseline="middle">{{ line.value|money }}</text>
+          {% endfor %}
+          {% for bar in chart.bars %}
+            {% if bar.path %}<path class="bar" d="{{ bar.path }}"></path>{% endif %}
+            {% if bar.show_label %}<text class="axis-label" x="{{ bar.center|floatformat:1 }}" y="{{ chart.label_y }}" text-anchor="middle">{{ bar.day|date:"j M" }}</text>{% endif %}
+            <rect class="chart-hit" x="{{ bar.x|floatformat:1 }}" y="0" width="{{ bar.width|floatformat:1 }}" height="{{ chart.baseline }}" fill="transparent" data-tip="{{ bar.day|date:'D j M' }}: {{ bar.value|money }} from {{ bar.orders }} order{{ bar.orders|pluralize }}"></rect>
+          {% endfor %}
+        </svg>
+        <div class="chart-tip" id="chart-tip" role="status" hidden></div>
+        </div>
+        <details class="chart-table small">
+          <summary class="link-btn">Show as a table</summary>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th scope="col">Day</th><th scope="col" class="num">Orders</th><th scope="col" class="num">Revenue</th></tr></thead>
+              <tbody>
+                {% for bar in chart.bars %}{% if bar.value %}<tr><td>{{ bar.day|date:"D j M" }}</td><td class="num">{{ bar.orders }}</td><td class="num">{{ bar.value|money }}</td></tr>{% endif %}{% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      {% else %}
+        <div class="chart-empty">No sales yet. Paid orders show up here by day.</div>
+      {% endif %}
+    </section>
+
+    <section class="panel" aria-labelledby="types-title">
+      <div class="panel-head"><h2 class="panel-title" id="types-title">Ticket types</h2></div>
+      {% if type_rows %}
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th scope="col">Type</th><th scope="col" class="num">Price</th><th scope="col" class="meter-cell">Sold</th></tr></thead>
+            <tbody>
+              {% for row in type_rows %}
+                <tr>
+                  <td><strong>{{ row.type.name }}</strong><br><span class="muted small">{{ row.type.get_inventory_mode_display }}</span></td>
+                  <td class="num">{{ row.type.price_cents|money:row.type.currency }}</td>
+                  <td class="meter-cell">
+                    <span class="meter-figure">{{ row.sold }} of {{ row.capacity }}</span>
+                    <svg class="meter" aria-hidden="true" focusable="false"><rect width="{{ row.ratio|percent }}" height="100%" rx="4"/></svg>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="muted">No ticket types yet. Add them through the organizer API before publishing.</p>
+      {% endif %}
+    </section>
+  </div>
+
+  <div class="dash-col">
+    <section class="panel" aria-labelledby="live-title">
+      <div class="panel-head">
+        <h2 class="panel-title" id="live-title">Latest orders</h2>
+        <span class="live-dot" id="live-status">Connecting</span>
+      </div>
+      <ul class="activity" id="activity">
+        {% for sale in recent %}
+          <li><span>{{ sale.tickets }} ticket{{ sale.tickets|pluralize }}, {{ sale.total_cents|money:sale.currency }}</span><span class="muted">{{ sale.created_at|ago }}</span></li>
+        {% empty %}
+          <li class="muted" data-empty>No orders yet. New ones appear here the moment they’re paid.</li>
+        {% endfor %}
+      </ul>
+    </section>
+
+    <section class="panel" id="refunds" aria-labelledby="refunds-title">
+      <div class="panel-head">
+        <h2 class="panel-title" id="refunds-title">Refund requests</h2>
+        {% if pending_refunds %}<span class="tag tag-warn">{{ pending_refunds|length }} to review</span>{% endif %}
+      </div>
+      {% if refunds %}
+        <ul class="row-list">
+          {% for refund in refunds %}
+            <li>
+              <div>
+                <strong>{{ refund.amount_cents|money:refund.currency }}</strong>
+                <span class="muted">{{ refund.created_at|date:"j M, H:i" }}</span>
+                {% if refund.reason %}<br><span class="muted">“{{ refund.reason }}”</span>{% endif %}
+              </div>
+              {% if refund.status == "requested" %}
+                <div class="cluster">
+                  <form method="post" action="{% url 'organizer:refund-reject' refund.id %}">{% csrf_token %}<button class="btn btn-sm btn-secondary" type="submit">Decline</button></form>
+                  <form method="post" action="{% url 'organizer:refund-approve' refund.id %}">{% csrf_token %}<button class="btn btn-sm" type="submit">Refund</button></form>
+                </div>
+              {% elif refund.status == "succeeded" %}<span class="tag tag-ok">Refunded</span>
+              {% elif refund.status == "rejected" %}<span class="tag">Declined</span>
+              {% else %}<span class="tag tag-warn">{{ refund.status|capfirst }}</span>{% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="muted small">Customers can ask for a refund from their tickets page until the event starts.</p>
+      {% endif %}
+    </section>
+
+    <section class="panel" id="door-team" aria-labelledby="door-title">
+      <div class="panel-head"><h2 class="panel-title" id="door-title">Door team</h2></div>
+      <p class="muted small">People on the door team can scan tickets for this event at <a href="{% url 'organizer:scan' %}">Scan tickets</a>.</p>
+      {% if staff %}
+        <ul class="row-list">
+          {% for assignment in staff %}
+            <li>
+              <span>{{ assignment.user.email }}</span>
+              <form method="post" action="{% url 'organizer:staff-remove' event.pk %}">{% csrf_token %}<input type="hidden" name="email" value="{{ assignment.user.email }}"><button class="link-btn small" type="submit">Remove</button></form>
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+      <form class="inline-form" method="post" action="{% url 'organizer:staff-add' event.pk %}">
+        {% csrf_token %}
+        <label class="field"><span class="field-label">Add by email</span><input type="email" name="email" required autocomplete="off" placeholder="name@example.com"></label>
+        <button class="btn btn-secondary" type="submit">Add</button>
+      </form>
+    </section>
+
+    {% if can_cancel %}
+      <details class="panel danger-zone">
+        <summary>Cancel this event</summary>
+        <form class="stack" method="post" action="{% url 'organizer:cancel' event.pk %}">
+          {% csrf_token %}
+          <p class="small">Cancelling takes the event off sale and refunds every paid order in full. This can’t be undone.</p>
+          <label class="field"><span class="field-label">Reason (optional)</span><input type="text" name="reason" maxlength="255"></label>
+          <label class="field"><span class="field-label">Type <strong>{{ event.title }}</strong> to confirm</span><input type="text" name="confirm_title" required autocomplete="off"></label>
+          <button class="btn btn-danger" type="submit">Cancel event and refund everyone</button>
+        </form>
+      </details>
+    {% endif %}
+  </div>
+</div>
+
+{{ dash_config|json_script:"tf-dash" }}
+{% endblock %}
+
+{% block scripts %}<script src="{% static 'js/dashboard.js' %}?v={{ asset_version }}" defer></script>{% endblock %}

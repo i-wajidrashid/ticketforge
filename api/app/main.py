@@ -10,6 +10,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api.app.config import settings
 from api.app.middleware import RequestIDMiddleware
@@ -50,6 +51,16 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=exc.status_code,
             content=error_payload(exc.code, exc.message, exc.details),
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        # Unknown routes and wrong methods get the same envelope as everything else.
+        codes = {404: "NOT_FOUND", 405: "METHOD_NOT_ALLOWED"}
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=error_payload(codes.get(exc.status_code, "HTTP_ERROR"), str(exc.detail)),
+            headers=getattr(exc, "headers", None),
         )
 
     @app.exception_handler(RequestValidationError)

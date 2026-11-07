@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Scan tickets | TicketForge{% endblock %}
+
+{% block content %}
+<div class="scan">
+  <header>
+    <h1 class="page-title">Scan tickets</h1>
+    <p class="muted">Point a handheld scanner at the QR code, or use this device’s camera. Each ticket gets in once; a second scan shows when it was first used.</p>
+  </header>
+
+  {% if events %}
+    <p class="small">You’re on the door for:
+      {% for event in events %}<strong>{{ event.title }}</strong> ({{ event.starts_at|date:"D j M" }}){% if not forloop.last %}, {% endif %}{% endfor %}
+    </p>
+  {% else %}
+    <div class="notice notice-warning"><p>You’re not on the door team for any upcoming event yet. Ask the organizer to add your email address.</p></div>
+  {% endif %}
+
+  <div class="scan-result" id="scan-result" aria-live="assertive">
+    <span class="verdict" id="scan-verdict">Ready</span>
+    <span id="scan-detail">Waiting for the first ticket.</span>
+  </div>
+
+  <form class="inline-form" id="scan-form" autocomplete="off">
+    <label class="field">
+      <span class="field-label">Ticket code</span>
+      <input class="input" id="scan-input" name="qr_token" required autofocus spellcheck="false" placeholder="Scan or paste the code">
+    </label>
+    <button class="btn" type="submit">Check ticket</button>
+  </form>
+
+  <div class="cluster">
+    <button class="btn btn-secondary" type="button" id="camera-start" hidden>Use camera</button>
+    <button class="btn btn-secondary" type="button" id="camera-stop" hidden>Stop camera</button>
+  </div>
+  <video class="scan-video" id="camera" playsinline muted hidden></video>
+
+  <section aria-labelledby="history-title">
+    <h2 class="panel-title" id="history-title">This session</h2>
+    <ul class="row-list" id="scan-history"><li class="muted" data-empty>No scans yet.</li></ul>
+  </section>
+</div>
+
+{{ scan_config|json_script:"tf-scan" }}
+{% endblock %}
+
+{% block scripts %}<script src="{% static 'js/scan.js' %}?v={{ asset_version }}" defer></script>{% endblock %}

@@ -1,0 +1,33 @@
+{% load tf %}<div class="table-wrap">
+  <table class="table">
+    <thead>
+      <tr>
+        <th scope="col">Event</th>
+        <th scope="col">Date</th>
+        <th scope="col">Status</th>
+        <th scope="col" class="num">Sold</th>
+        <th scope="col">Capacity used</th>
+        <th scope="col" class="num">Revenue</th>
+        <th scope="col" class="num">Checked in</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+        <tr>
+          <td>
+            <span class="table-event">
+              {% include "components/poster.html" with event=row.event size="thumb" %}
+              <a href="{% url 'organizer:event' row.event.pk %}">{{ row.event.title }}</a>
+            </span>
+          </td>
+          <td>{{ row.event.starts_at|date:"D j M Y" }}</td>
+          <td>{% include "organizers/_status.html" with state=row.event.status_display %}</td>
+          <td class="num">{{ row.stats.tickets_sold|default:0 }} / {{ row.capacity }}</td>
+          <td><svg class="meter" role="img" aria-label="{{ row.sold_ratio|percent }} sold" focusable="false"><rect width="{{ row.sold_ratio|percent }}" height="100%" rx="4"/></svg></td>
+          <td class="num">{{ row.stats.revenue_cents|default:0|money }}</td>
+          <td class="num">{{ row.stats.checked_in|default:0 }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

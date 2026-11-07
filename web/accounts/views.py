@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, cast
 
+from common.security import encode_token
 from django.contrib import messages
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
@@ -13,13 +14,16 @@ from django.core import signing
 from django.core.exceptions import PermissionDenied
 from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import redirect, render
+from django.utils import timezone
 from django.views.decorators.http import require_http_methods, require_POST
 
 from web.accounts import emails
 from web.accounts.forms import LoginForm, SignupForm
 from web.accounts.models import User
-from web.accounts.readmodel import account_orders, account_tickets, owned_ticket
+from web.accounts.readmodel import account_orders, account_refunds, account_tickets
 from web.accounts.throttling import clear_login_failures, is_login_blocked, register_failed_login
+from web.events.models import Event, TicketType
+from web.venues.models import Seat
 
 logger = logging.getLogger(__name__)
 
@@ -98,37 +102,101 @@ def verify_email_view(request: HttpRequest, token: str) -> HttpResponse:
     return redirect("accounts:login")
 
 
+REFUND_LOCKED = {"requested", "processing", "succeeded"}
+
+
+def _order_cards(user_id: int) -> list[dict[str, Any]]:
+    """Join checkout orders/tickets with catalogue data for the tickets page.
+
+    Three checkout SELECTs plus three catalogue queries, however many orders
+    the customer has: no N+1.
+    """
+    orders = account_orders(user_id)
+    tickets = account_tickets(user_id)
+    refunds = account_refunds(user_id)
+
+    events = Event.objects.select_related("venue").in_bulk({o["event_id"] for o in orders})
+    type_names = dict(
+        TicketType.objects.filter(pk__in={t["ticket_type_id"] for t in tickets}).values_list(
+            "pk", "name"
+        )
+    )
+    seats = Seat.objects.select_related("section").in_bulk(
+        {t["seat_id"] for t in tickets if t["seat_id"]}
+    )
+
+    by_order: dict[str, list[dict[str, Any]]] = {}
+    for ticket in tickets:
+        seat = seats.get(ticket["seat_id"]) if ticket["seat_id"] else None
+        ticket["type_name"] = type_names.get(ticket["ticket_type_id"], "Ticket")
+        ticket["seat"] = (
+            f"{seat.section.name}, row {seat.row}, seat {seat.number}" if seat else None
+        )
+        by_order.setdefault(str(ticket["order_id"]), []).append(ticket)
+
+    now = timezone.now()
+    cards = []
+    for order in orders:
+        event = events.get(order["event_id"])
+        refund = refunds.get(str(order["id"]))
+        started = event is None or event.starts_at <= now
+        order_tickets = by_order.get(str(order["id"]), [])
+        scanned = any(ticket["checked_in_at"] for ticket in order_tickets)
+        cards.append(
+            {
+                "order": order,
+                "event": event,
+                "tickets": order_tickets,
+                "refund": refund,
+                "upcoming": event is not None and event.ends_at >= now,
+                "can_refund": order["status"] == "paid"
+                and not started
+                and not scanned
+                and not (refund and refund["status"] in REFUND_LOCKED),
+            }
+        )
+    return cards
+
+
 @login_required
 def account_view(request: HttpRequest) -> HttpResponse:
     user = cast(User, request.user)
+    cards = _order_cards(int(user.pk))
+    token = encode_token(user.pk, user.role, "access", ttl_seconds=3600) if user.is_verified else ""
     return render(
         request,
         "accounts/account.html",
-        {"orders": account_orders(int(user.pk)), "tickets": account_tickets(int(user.pk))},
+        {
+            "upcoming": [card for card in cards if card["upcoming"]],
+            "past": [card for card in cards if not card["upcoming"]],
+            "account_config": {"token": token},
+        },
     )
 
 
 @login_required
 def ticket_pdf_view(request: HttpRequest, ticket_id: Any) -> HttpResponse:
     user = cast(User, request.user)
-    ticket = owned_ticket(int(user.pk), str(ticket_id))
-    if ticket is None:
-        raise Http404("Ticket not found")
-    if ticket["status"] not in {"valid", "checked_in"}:
-        raise PermissionDenied("This ticket is no longer downloadable.")
     if not user.is_verified:
-        messages.error(request, "Verify your email before downloading tickets.")
+        messages.error(request, "Confirm your email address before downloading tickets.")
         return redirect("accounts:account")
 
+    from api.app.db import session_scope
+    from api.app.services import tickets as ticket_service
+    from api.app.services.errors import NotFound, TicketInvalid
     from worker.pdf import render_ticket_pdf
 
-    pdf_bytes = render_ticket_pdf(
-        ticket_id=str(ticket["id"]),
-        qr_token=ticket["qr_token"],
-        owner_email=user.email,
-        order_id=str(ticket["order_id"]),
-    )
-    response = HttpResponse(pdf_bytes, content_type="application/pdf")
+    try:
+        with session_scope() as session:
+            fields = ticket_service.ticket_pdf_payload(
+                session, user_id=int(user.pk), ticket_id=str(ticket_id)
+            )
+    except NotFound as exc:
+        raise Http404("Ticket not found") from exc
+    except TicketInvalid as exc:
+        raise PermissionDenied("This ticket is no longer downloadable.") from exc
+
+    response = HttpResponse(render_ticket_pdf(**fields), content_type="application/pdf")
     response["Content-Disposition"] = f'attachment; filename="ticket-{ticket_id}.pdf"'
     return response
 
@@ -178,6 +246,9 @@ def password_reset_confirm_view(request: HttpRequest) -> HttpResponse:
             else:
                 user.set_password(password1)
                 user.save(update_fields=["password"])
+                # Following the emailed link proves who owns the account, so a
+                # lockout caused by someone else guessing ends here.
+                clear_login_failures(_ip(request), user.email)
                 messages.success(request, "Password updated. You can log in now.")
                 return redirect("accounts:login")
     return render(request, "accounts/password_reset_confirm.html", {"token": token})

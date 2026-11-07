@@ -51,5 +51,14 @@ check: lint typecheck coverage ## everything CI runs
 loadtest: ## Locust UI at http://localhost:8089
 	uv run locust -f locustfile.py --host https://localhost
 
+loadtest-on: ## lift the per-IP edge rate limit for a load test
+	docker compose -f docker-compose.yml -f docker-compose.loadtest.yml up -d nginx
+
+loadtest-headless: ## 500 users for 90 s, summary only
+	uv run locust -f locustfile.py --host https://localhost --headless -u 500 -r 50 -t 90s --only-summary
+
+loadtest-off: ## restore the production edge rate limit
+	docker compose up -d --force-recreate nginx
+
 shell: ## Django shell inside the container
 	docker compose exec web python manage.py shell

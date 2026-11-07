@@ -1,0 +1,1 @@
+{% load tf %}{% poster_wall 3 as wall %}{% if wall %}<div class="auth-art" aria-hidden="true">{% for event in wall %}{% include "components/poster.html" with event=event %}{% endfor %}</div>{% endif %}
