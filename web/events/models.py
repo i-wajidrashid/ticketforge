@@ -1,4 +1,4 @@
-"""Events and ticket types -- the catalogue other services read."""
+"""Events and ticket types: the catalogue other services read."""
 
 from __future__ import annotations
 
@@ -100,6 +100,29 @@ class Event(models.Model):
             self.status in {EventStatus.PUBLISHED, EventStatus.ON_SALE}
             and self.ends_at > timezone.now()
         )
+
+    def status_display(self) -> tuple[str, str]:
+        """(status key, label) as an organizer should read it.
+
+        ``published`` and ``on_sale`` are both sellable; whether tickets can
+        actually be bought right now depends on the ticket types' sale
+        windows, so the label reflects that instead of the raw column.
+        """
+        if self.status not in {EventStatus.PUBLISHED, EventStatus.ON_SALE}:
+            return str(self.status), str(self.get_status_display())
+        now = timezone.now()
+        if self.ends_at <= now:
+            return "finished", "Finished"
+        types = list(self.ticket_types.all())
+        if any(
+            (t.sale_starts_at is None or t.sale_starts_at <= now)
+            and (t.sale_ends_at is None or t.sale_ends_at > now)
+            for t in types
+        ):
+            return "on_sale", "On sale"
+        if any(t.sale_starts_at and t.sale_starts_at > now for t in types):
+            return "published", "Sales open later"
+        return "published", "Sales closed"
 
     def __str__(self) -> str:
         return self.title

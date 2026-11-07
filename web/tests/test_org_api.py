@@ -9,9 +9,14 @@ from rest_framework.test import APIClient
 from tests.factories import (
     EventFactory,
     OrganizerFactory,
+    SeatFactory,
+    SectionFactory,
     UserFactory,
     VenueFactory,
 )
+
+from web.events.models import EventStatus
+from web.venues.models import Seat
 
 pytestmark = pytest.mark.django_db
 
@@ -173,3 +178,84 @@ def test_refund_listing_is_scoped_to_the_organizer():
     response = _client_for(organizer.user).get("/org/api/v1/refunds/")
     assert response.status_code == 200
     assert response.json() == []
+
+
+# ------------------------------------------------------------------ venues
+
+
+def test_organizers_cannot_change_a_venue_another_organizer_uses():
+    owner, other = OrganizerFactory(), OrganizerFactory()
+    event = EventFactory(organizer=owner, status=EventStatus.DRAFT)
+    venue = event.venue
+    seat = SeatFactory(section=SectionFactory(venue=venue))
+    client = _client_for(other.user)
+
+    assert client.get(f"/org/api/v1/venues/{venue.pk}/").status_code == 200
+    renamed = client.patch(f"/org/api/v1/venues/{venue.pk}/", {"name": "Mine now"}, format="json")
+    assert renamed.status_code == 403
+    assert "only an admin" in renamed.json()["error"]["message"]
+    assert (
+        client.delete(f"/org/api/v1/sections/{seat.section_id}/seats/{seat.pk}/").status_code == 403
+    )
+    added = client.post(
+        f"/org/api/v1/venues/{venue.pk}/sections/", {"name": "Annex"}, format="json"
+    )
+    assert added.status_code == 403
+    assert Seat.objects.filter(pk=seat.pk).exists()
+
+    # The organizer whose draft is the only event there can still edit it.
+    own = _client_for(owner.user)
+    assert (
+        own.patch(f"/org/api/v1/venues/{venue.pk}/", {"name": "Renamed"}, format="json").status_code
+        == 200
+    )
+    assert own.delete(f"/org/api/v1/sections/{seat.section_id}/seats/{seat.pk}/").status_code == 204
+
+
+def test_seats_under_a_published_event_are_frozen_but_can_be_added_to():
+    organizer = OrganizerFactory()
+    event = EventFactory(organizer=organizer, status=EventStatus.PUBLISHED)
+    section = SectionFactory(venue=event.venue)
+    seat = SeatFactory(section=section)
+    client = _client_for(organizer.user)
+
+    moved = client.patch(
+        f"/org/api/v1/sections/{section.pk}/seats/{seat.pk}/", {"number": "99"}, format="json"
+    )
+    assert moved.status_code == 403
+    assert (
+        client.delete(f"/org/api/v1/venues/{event.venue_id}/sections/{section.pk}/").status_code
+        == 403
+    )
+
+    added = client.post(
+        f"/org/api/v1/sections/{section.pk}/seats/", {"row": "Z", "number": "1"}, format="json"
+    )
+    assert added.status_code == 201
+    bulk = client.post(
+        f"/org/api/v1/sections/{section.pk}/seats/bulk/",
+        {"csv": "row,number\nZ,2\nZ,3"},
+        format="json",
+    )
+    assert bulk.status_code in (200, 201)
+    assert section.seats.count() == 4
+
+
+def test_a_venue_with_events_cannot_be_deleted():
+    organizer = OrganizerFactory()
+    event = EventFactory(organizer=organizer, status=EventStatus.DRAFT)
+    response = _client_for(organizer.user).delete(f"/org/api/v1/venues/{event.venue_id}/")
+    assert response.status_code == 403
+    assert "can't be deleted" in response.json()["error"]["message"]
+
+    empty = VenueFactory()
+    assert _client_for(organizer.user).delete(f"/org/api/v1/venues/{empty.pk}/").status_code == 204
+
+
+def test_admins_can_edit_a_shared_venue():
+    event = EventFactory(status=EventStatus.DRAFT)
+    admin = UserFactory(role="admin")
+    response = _client_for(admin).patch(
+        f"/org/api/v1/venues/{event.venue_id}/", {"name": "Fixed typo"}, format="json"
+    )
+    assert response.status_code == 200

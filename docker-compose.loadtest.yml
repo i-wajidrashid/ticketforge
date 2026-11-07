@@ -1,0 +1,10 @@
+# Overlay for load testing only:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.loadtest.yml up -d nginx
+#
+# Swaps the per-IP edge rate limit for a very high one (see
+# deploy/nginx/limits.loadtest.conf). `make loadtest-off` puts it back.
+services:
+  nginx:
+    volumes:
+      - ./deploy/nginx/limits.loadtest.conf:/etc/nginx/limits.conf:ro

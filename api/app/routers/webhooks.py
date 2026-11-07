@@ -7,13 +7,15 @@ import logging
 from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, Request
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.app.config import settings
 from api.app.db import get_session
+from api.app.models import Order
 from api.app.services import payments
 from api.app.services.errors import InvalidSignature
-from api.app.services.notifications import broadcast_paid_order
+from api.app.services.notifications import broadcast_paid_order, broadcast_refunded_order
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +26,7 @@ def _parse_event(raw: bytes, signature: str | None) -> dict[str, Any]:
     """Verify the signature with Stripe in live mode.
 
     In explicit fake-gateway mode (local demo / tests) there is no Stripe account
-    to sign anything, so the JSON body is trusted -- never the case in production.
+    to sign anything, so the JSON body is trusted. That is never the case in production.
     """
     if settings.stripe_gateway.lower() != "fake" and settings.stripe_secret_key != "sk_test_xxx":
         import stripe
@@ -77,4 +79,32 @@ async def stripe_webhook(
 
                 send_refund_email.delay(order.id)
 
+    if result.get("result") == "refunded" and event_type in {"charge.refunded", "refund.updated"}:
+        intent_id = str(event.get("data", {}).get("object", {}).get("payment_intent") or "")
+        refunded = session.scalars(
+            select(Order.id).where(Order.stripe_payment_intent_id == intent_id)
+        ).first()
+        if refunded is not None:
+            broadcast_refunded_order(session, refunded)
+        _refresh_availability_for_intent(
+            session, str(event.get("data", {}).get("object", {}).get("payment_intent") or "")
+        )
+
     return {"received": True, **result}
+
+
+def _refresh_availability_for_intent(session: Session, payment_intent_id: str) -> None:
+    """A refund confirmed by Stripe may return seats and re-open a sold-out event."""
+    from sqlalchemy import select as sa_select
+
+    event_id = session.scalar(
+        sa_select(Order.event_id).where(Order.stripe_payment_intent_id == payment_intent_id)
+    )
+    if event_id is None:
+        return
+    from worker.tasks import refresh_event_availability
+
+    try:
+        refresh_event_availability.delay(int(event_id))
+    except Exception:
+        logger.warning("could not enqueue availability refresh", exc_info=True)

@@ -53,7 +53,7 @@ def _setup():
 def test_inventory_invariants_hold_under_random_histories(operations):
     truncate_checkout()
     event, seats, users = _setup()
-    inventory.seat_map(event.pk)
+    inventory.ensure_event_seats(event.pk)
     session = session_factory()()
     try:
         for user_index, action in operations:

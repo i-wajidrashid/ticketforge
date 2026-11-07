@@ -1,0 +1,16 @@
+{% load tf %}{% comment %}
+  Generated gig poster for an event. Pass `event`, optional `size` ("thumb"),
+  optional `flag` (e.g. "Sold out"). Purely decorative when a title is shown
+  next to it, so it is hidden from assistive tech unless `labelled` is set.
+{% endcomment %}<div class="poster poster--{{ event.category|default:'other' }} poster--v{{ event.pk|poster_variant }}{% if size == 'thumb' %} poster-thumb{% endif %}{% if quiet %} is-quiet{% endif %}"{% if labelled %} role="img" aria-label="Poster for {{ event.title }}"{% else %} aria-hidden="true"{% endif %}>
+  <div class="poster-art"></div>
+  <div class="poster-date">
+    <span class="poster-day">{{ event.starts_at|date:"j" }}</span>
+    <span class="poster-month">{{ event.starts_at|date:"M" }}</span>
+  </div>
+  {% if flag %}<span class="poster-flag">{{ flag }}</span>{% endif %}
+  <div class="poster-foot">
+    <span class="poster-title">{{ event.title }}</span>
+    <span class="poster-venue">{{ event.venue.name }}</span>
+  </div>
+</div>

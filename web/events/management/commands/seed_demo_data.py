@@ -6,7 +6,7 @@ Run inside the web/api container:  python manage.py seed_demo_data --orders 400
 from __future__ import annotations
 
 import random
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from typing import Any
 
 from api.app.db import session_scope
@@ -57,6 +57,45 @@ EVENT_BLUEPRINTS = [
     ("Founders Fireside", Category.TECH, "Metro Arts Center", 3, InventoryMode.RESERVED, 7500),
 ]
 
+DESCRIPTIONS = {
+    "Neon Skyline": (
+        "A two-hour synth-pop set with a full light rig. Reserved seating in the Stalls "
+        "and on the Balcony. Doors open 45 minutes before the show."
+    ),
+    "Midnight Static": (
+        "Loud guitars and small-room energy in a big room. Standing only, so arrive "
+        "early for a spot near the front."
+    ),
+    "Ship It: Platform Engineering": (
+        "An evening of talks on running production systems: deploy pipelines, on-call "
+        "that doesn't burn people out, and what actually breaks at scale. Seated, with "
+        "questions after each talk."
+    ),
+    "Laugh Track Live": "Five comics, one host, ninety minutes. Some material is for adults.",
+    "Abstract Futures": (
+        "Three of the exhibiting artists talk through their new work, followed by an "
+        "open floor. Reserved seats for the panel."
+    ),
+    "City Derby": (
+        "The biggest local fixture of the season. General admission terraces, and the "
+        "gates open 90 minutes before kick-off."
+    ),
+    "Synthwave Sessions": "Retro synths, analogue drum machines and a late finish. Standing only.",
+    "Founders Fireside": (
+        "Three founders on what they would do differently, in an unscripted conversation "
+        "with the audience. Reserved seating."
+    ),
+}
+
+SHOW_TIME = time(19, 30)  # venue-local
+SHOW_LENGTH = timedelta(hours=3)
+
+
+def evening(days_from_now: int) -> datetime:
+    """19:30 venue-local time, ``days_from_now`` days ahead (stored as UTC)."""
+    day = timezone.localdate() + timedelta(days=days_from_now)
+    return timezone.make_aware(datetime.combine(day, SHOW_TIME))
+
 
 class Command(BaseCommand):
     help = "Seed demo organizers, venues, events, customers and paid orders."
@@ -67,12 +106,17 @@ class Command(BaseCommand):
         )
         parser.add_argument("--customers", type=int, default=120, help="Number of demo customers.")
         parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
+        parser.add_argument(
+            "--reschedule",
+            action="store_true",
+            help="Move existing demo events to fresh evening dates and refresh their copy.",
+        )
 
     def handle(self, *args: Any, **options: Any) -> None:
         rng = random.Random(options["seed"])
         organizer = self._organizer()
         venues = self._venues()
-        events = self._events(organizer, venues)
+        events = self._events(organizer, venues, reschedule=options["reschedule"])
         customers = self._customers(options["customers"])
         paid, abandoned = self._orders(rng, events, customers, options["orders"])
 
@@ -138,8 +182,9 @@ class Command(BaseCommand):
         )
         return {"Metro Arts Center": metro, "Skyline Arena": arena, "Comedy Cellar Karachi": comedy}
 
-    def _events(self, organizer: Organizer, venues: dict[str, Venue]) -> list[Event]:
-        now = timezone.now()
+    def _events(
+        self, organizer: Organizer, venues: dict[str, Venue], *, reschedule: bool = False
+    ) -> list[Event]:
         events: list[Event] = []
         for title, category, venue_name, days, mode, price in EVENT_BLUEPRINTS:
             event, created = Event.objects.get_or_create(
@@ -148,13 +193,21 @@ class Command(BaseCommand):
                     "organizer": organizer,
                     "venue": venues[venue_name],
                     "title": title,
-                    "description": f"{title} — a TicketForge demo event at {venue_name}.",
+                    "description": DESCRIPTIONS.get(title, ""),
                     "category": category,
-                    "starts_at": now + timedelta(days=days, hours=19),
-                    "ends_at": now + timedelta(days=days, hours=22),
+                    "starts_at": evening(days),
+                    "ends_at": evening(days) + SHOW_LENGTH,
                     "status": EventStatus.PUBLISHED if days > 10 else EventStatus.ON_SALE,
                 },
             )
+            if reschedule and not created:
+                event.description = DESCRIPTIONS.get(title, event.description)
+                event.starts_at = evening(days)
+                event.ends_at = event.starts_at + SHOW_LENGTH
+                for ticket_type in event.ticket_types.all():
+                    ticket_type.sale_ends_at = event.starts_at - timedelta(hours=1)
+                    ticket_type.save(update_fields=["sale_ends_at"])
+                event.save(update_fields=["description", "starts_at", "ends_at", "updated_at"])
             if created:
                 TicketType.objects.create(
                     event=event,

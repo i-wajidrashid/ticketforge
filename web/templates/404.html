@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}We can’t find that page | TicketForge{% endblock %}
+{% block content %}
+<div class="error-page">
+  <div class="stack">
+    <h1>We can’t find that page</h1>
+    <p class="muted">The event may have ended or been taken down, or the link has a typo.</p>
+    <div class="cluster"><a class="btn" href="{% url 'events:index' %}">See what’s on</a>{% if user.is_authenticated %}<a class="btn btn-secondary" href="{% url 'accounts:account' %}">My tickets</a>{% endif %}</div>
+  </div>
+</div>
+{% endblock %}

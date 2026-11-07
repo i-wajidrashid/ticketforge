@@ -58,7 +58,7 @@ def event_document(event: Any) -> dict[str, Any]:
         "starts_at": int(event.starts_at.timestamp()),
         "ends_at": int(event.ends_at.timestamp()),
         "min_price_cents": event.min_price_cents,
-        "has_availability": event.status == "on_sale",
+        "has_availability": event.status in ("published", "on_sale"),
         "status": event.status,
     }
 

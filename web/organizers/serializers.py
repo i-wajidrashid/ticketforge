@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from django.utils import timezone
 from rest_framework import serializers
 
-from web.events.models import Event, EventStatus, StaffAssignment, TicketType
+from web.events.models import Event, StaffAssignment, TicketType
 from web.venues.models import Seat, Section, Venue
 
 
@@ -118,16 +117,3 @@ class PublishResultSerializer(serializers.Serializer[Any]):
 
 class EventCancelSerializer(serializers.Serializer[Any]):
     reason = serializers.CharField(required=False, allow_blank=True, default="")
-
-
-def assert_publishable(event: Event) -> None:
-    if event.status not in {EventStatus.DRAFT, EventStatus.PUBLISHED}:
-        raise serializers.ValidationError(
-            {"status": "Only draft or published events can be published."}
-        )
-    if not event.ticket_types.exists():
-        raise serializers.ValidationError({"ticket_types": "Add at least one ticket type first."})
-    if event.starts_at <= timezone.now():
-        raise serializers.ValidationError({"starts_at": "The start time must be in the future."})
-    if event.venue.capacity and event.venue.capacity <= 0:
-        raise serializers.ValidationError({"venue": "The venue capacity must be positive."})

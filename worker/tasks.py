@@ -12,14 +12,17 @@ from api.app.db import session_scope
 from api.app.models import Order, Refund
 from api.app.realtime import hold_expired, seat_updates
 from api.app.services import holds as hold_service
+from api.app.services import inventory as inventory_service
 from api.app.services import payments as payment_service
 from api.app.services import tickets as ticket_service
+from api.app.services.notifications import broadcast_refunded_order
 from api.app.services.stripe_gateway import get_gateway
 from celery import shared_task
 from common.search import delete_event, event_document, upsert_event
 from django.conf import settings
 from django.core import signing
 from django.core.mail import EmailMultiAlternatives, send_mail
+from django.db import transaction
 from django.utils import timezone
 from sqlalchemy import select
 from web.events.models import Event, EventStatus
@@ -84,9 +87,17 @@ def send_order_confirmation(self: Any, order_id: str) -> str:
         tickets = ticket_service.order_tickets(session, order.id)
         user = core_repo.get_user(order.user_id)
         event = core_repo.get_event(order.event_id)
-
-    if not tickets or user is None:
-        return "nothing_to_send"
+        if not tickets or user is None:
+            return "nothing_to_send"
+        pdfs = [
+            (
+                ticket.id,
+                render_ticket_pdf(
+                    **ticket_service.pdf_fields(session, ticket, order, owner_email=user.email)
+                ),
+            )
+            for ticket in tickets[:10]
+        ]
 
     subject = f"Your tickets for {event.title if event else 'your event'}"
     body = (
@@ -102,15 +113,8 @@ def send_order_confirmation(self: Any, order_id: str) -> str:
         from_email=settings.DEFAULT_FROM_EMAIL,
         to=[user.email],
     )
-    for ticket in tickets[:10]:
-        pdf_bytes = render_ticket_pdf(
-            ticket_id=ticket.id,
-            qr_token=ticket.qr_token,
-            owner_email=user.email,
-            order_id=order.id,
-            event_title=event.title if event else "TicketForge",
-        )
-        message.attach(f"ticket-{ticket.id}.pdf", pdf_bytes, "application/pdf")
+    for ticket_id, pdf_bytes in pdfs:
+        message.attach(f"ticket-{ticket_id}.pdf", pdf_bytes, "application/pdf")
     message.send()
     return "sent"
 
@@ -186,6 +190,18 @@ def process_refund(self: Any, refund_id: int, actor_id: int | None = None) -> di
         result = payment_service.process_refund(
             session, refund_id=refund_id, actor_id=actor_id, gateway=get_gateway()
         )
+        event_id = session.scalar(
+            select(Order.event_id)
+            .join(Refund, Refund.order_id == Order.id)
+            .where(Refund.id == refund_id)
+        )
+        if result.get("status") == "refunded":
+            order_id = session.scalar(select(Refund.order_id).where(Refund.id == refund_id))
+            if order_id is not None:
+                broadcast_refunded_order(session, order_id)
+    if result.get("status") == "refunded" and event_id is not None:
+        # A refund can return seats to sale, which may re-open a sold-out event.
+        refresh_event_availability.delay(int(event_id))
     return result
 
 
@@ -239,6 +255,37 @@ def cancel_event_refunds(self: Any, event_id: int) -> dict[str, Any]:
     return {"refunds_created": created}
 
 
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=5)
+def refresh_event_availability(self: Any, event_id: int) -> str:
+    """Flip an event between on-sale and sold-out from live checkout inventory.
+
+    Idempotent and order-independent: it always recomputes from the source of
+    truth, so a burst of sales/refunds converges no matter how tasks interleave.
+    """
+    with session_scope() as session:
+        unsold = inventory_service.unsold_units(session, event_id)
+    if unsold is None:
+        return "no_inventory"
+
+    with transaction.atomic():
+        event = Event.objects.select_for_update().filter(pk=event_id).first()
+        if event is None:
+            return "missing"
+        if unsold == 0 and event.status in {EventStatus.PUBLISHED, EventStatus.ON_SALE}:
+            event.status = EventStatus.SOLD_OUT
+        elif unsold > 0 and event.status == EventStatus.SOLD_OUT:
+            event.status = EventStatus.ON_SALE
+        else:
+            return "unchanged"
+        # save() (not update()) so the search index picks up the new status.
+        event.save(update_fields=["status", "updated_at"])
+    logger.info(
+        "event availability changed",
+        extra={"extra_fields": {"event_id": event_id, "status": event.status, "unsold": unsold}},
+    )
+    return str(event.status)
+
+
 @shared_task
 def reconcile_payments() -> dict[str, Any]:
     with session_scope() as session:
@@ -247,12 +294,17 @@ def reconcile_payments() -> dict[str, Any]:
 
 @shared_task
 def mark_finished_events() -> dict[str, Any]:
-    now = timezone.now()
+    # Save row by row (not queryset.update) so post_save fires and the search
+    # signal removes each finished event from the index.
+    count = 0
     finished = Event.objects.filter(
         status__in=[EventStatus.PUBLISHED, EventStatus.ON_SALE, EventStatus.SOLD_OUT],
-        ends_at__lt=now,
+        ends_at__lt=timezone.now(),
     )
-    count = finished.update(status=EventStatus.FINISHED, updated_at=now)
+    for event in finished.iterator(chunk_size=200):
+        event.status = EventStatus.FINISHED
+        event.save(update_fields=["status", "updated_at"])
+        count += 1
     return {"finished": count}
 
 

@@ -1,9 +1,9 @@
 """Checkout, Stripe webhooks and refunds.
 
 Idempotency is enforced at three layers:
-1. ``Order.idempotency_key`` -- a retried pay request reuses one order;
-2. ``StripeEvent.stripe_event_id`` -- a replayed webhook is a no-op;
-3. ``Refund.stripe_refund_id`` -- a retried refund never double-refunds.
+1. ``Order.idempotency_key``: a retried pay request reuses one order;
+2. ``StripeEvent.stripe_event_id``: a replayed webhook is a no-op;
+3. ``Refund.stripe_refund_id``: a retried refund never double-refunds.
 """
 
 from __future__ import annotations
@@ -163,10 +163,14 @@ def start_payment(
             idempotency_key=idempotency_key,
         )
     except Exception as exc:
-        order.status = "failed"
-        session.commit()
+        # Store nothing. Keeping a failed order here would block the hold for
+        # good (one order per hold), so a retry could never succeed. After the
+        # rollback the hold is still payable, and a retry with the same key
+        # reaches Stripe with the same idempotency key, which returns the
+        # original PaymentIntent if the first request did get through.
+        session.rollback()
         logger.exception("stripe payment intent creation failed")
-        raise PaymentFailed("The payment provider rejected the request. Please retry.") from exc
+        raise PaymentFailed("The payment provider didn't respond. Try again.") from exc
 
     order.stripe_payment_intent_id = intent.id
     order.client_secret = intent.client_secret
@@ -266,9 +270,8 @@ def _fulfill(session: Session, payload: dict[str, Any], gateway: PaymentGateway)
     if order.status in {"refunded", "partially_refunded"}:
         return "already_refunded"
 
-    hold = session.get(Hold, order.hold_id, with_for_update=True)
-    if hold is None:
-        return "missing_hold"
+    # orders.hold_id is a NOT NULL foreign key, so the hold always exists.
+    hold = session.scalars(select(Hold).where(Hold.id == order.hold_id).with_for_update()).one()
 
     now = utcnow()
     if hold.status == "active" and hold.expires_at > now:
@@ -437,7 +440,7 @@ def _mark_order_refunded(session: Session, order: Order, *, reason: str) -> None
 
 
 def release_order_seats(session: Session, order: Order) -> None:
-    """Return sold inventory to sale -- only while the event has not started."""
+    """Return sold inventory to sale, but only while the event has not started."""
     event = core_repo.get_event(order.event_id)
     if event is None or event.starts_at <= utcnow():
         return
@@ -478,6 +481,14 @@ def request_refund(session: Session, *, user_id: int, order_id: str, reason: str
     event = core_repo.get_event(order.event_id)
     if event is not None and event.starts_at <= utcnow():
         raise RefundNotAllowed("This event has already started.")
+
+    scanned = session.scalar(
+        select(func.count())
+        .select_from(Ticket)
+        .where(Ticket.order_id == order.id, Ticket.status == "checked_in")
+    )
+    if scanned:
+        raise RefundNotAllowed("A ticket on this order has already been scanned at the door.")
 
     existing = session.scalars(
         select(Refund).where(
@@ -520,9 +531,10 @@ def process_refund(
     if refund.status not in {"requested", "processing", "failed"}:
         raise RefundNotAllowed(f"Cannot process a refund in state '{refund.status}'.")
 
-    order = session.get(Order, refund.order_id, with_for_update=True)
-    if order is None:
-        raise NotFound("Order not found.")
+    # refund.order_id is a NOT NULL foreign key, so the order always exists.
+    order = session.scalars(
+        select(Order).where(Order.id == refund.order_id).with_for_update()
+    ).one()
     if order.status not in {"paid", "partially_refunded"}:
         raise RefundNotAllowed("This order is not refundable.")
 

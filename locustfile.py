@@ -1,8 +1,15 @@
-"""Locust load test for the public API.
+"""Locust load test for the public, read-heavy API.
 
-    make loadtest      # then open http://localhost:8089 and ramp to 500 users
+    make loadtest-on          # lift the per-IP edge limit (load testing only)
+    make loadtest-headless    # 500 users for 90 s, prints the summary
+    make loadtest-off         # restore the production edge limit
 
-The fake Stripe gateway means you can also exercise holds/payments safely.
+Or `make loadtest` for the Locust web UI at http://localhost:8089.
+
+Every task is an anonymous GET, the traffic shape of people browsing before a
+big on-sale. Checkout (holds and payments) is covered by the concurrency
+tests in tests/test_concurrency.py rather than here: 500 simulated buyers
+would sell out the demo venues in seconds and then only measure "sold out".
 """
 
 from __future__ import annotations
@@ -24,22 +31,10 @@ class TicketForgeUser(HttpUser):
     host = HOST
 
     def on_start(self) -> None:
-        self.client.verify = False
-        self.client.headers.update({"Content-Type": "application/json"})
-        index = random.randint(0, 99)
-        response = self.client.post(
-            "/accounts/api/token/",
-            json={"email": f"fan{index:03d}@ticketforge.local", "password": "ticketforge123"},
-        )
-        if response.status_code == 200:
-            self.token = response.json()["access"]
-            self.client.headers.update({"Authorization": f"Bearer {self.token}"})
-        else:
-            self.token = ""
-
+        self.client.verify = False  # the local stack uses a self-signed certificate
         if not EVENT_SLUGS:
-            listing = self.client.get("/api/v1/events").json().get("items", [])
-            EVENT_SLUGS.extend(event["slug"] for event in listing)
+            listing = self.client.get("/api/v1/events", name="/api/v1/events").json()
+            EVENT_SLUGS.extend(event["slug"] for event in listing.get("items", []))
 
     @task(5)
     def browse_events(self) -> None:

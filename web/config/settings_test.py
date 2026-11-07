@@ -2,6 +2,16 @@
 
 from __future__ import annotations
 
+import os
+
+# Tests run with DEBUG off, like production, so the base settings insist on
+# real-looking secrets. Set test-only ones before importing them.
+os.environ.setdefault("DJANGO_SECRET_KEY", "test-only-secret-key-0123456789abcdef")
+os.environ.setdefault("JWT_SECRET", "test-only-jwt-secret-0123456789abcdef")
+os.environ.setdefault("QR_SECRET", "test-only-qr-secret-0123456789abcdef")
+# Tests never reach Stripe; CI sets the same.
+os.environ.setdefault("STRIPE_GATEWAY", "fake")
+
 from web.config.settings import *  # noqa: F403
 from web.config.settings import BASE_DIR
 

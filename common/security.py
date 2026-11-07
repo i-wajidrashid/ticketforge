@@ -106,7 +106,7 @@ def decode_token(
 
 # ---------------------------------------------------------------------------
 # Ticket QR tokens: opaque, signed, and impossible to guess without the secret.
-# A token reveals nothing on its own -- the server derives the ticket id locally.
+# A token reveals nothing on its own; the server derives the ticket id locally.
 # ---------------------------------------------------------------------------
 
 

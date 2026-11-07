@@ -1,248 +1,304 @@
 # TicketForge
 
-A production-grade event ticketing platform: organizers create events and sell tickets,
-customers reserve seats and pay, door staff scan signed QR tickets — and **nothing is ever
-sold twice**, even with 50 browsers fighting over the same seat.
+TicketForge is an open-source event ticketing platform. Organizers set up venues, events and ticket types. Fans hold seats for ten minutes, pay, and get a signed QR ticket by email. Door staff scan those tickets with a phone camera or a handheld scanner.
 
-Built as a reference implementation of the hard parts of backend engineering: concurrency,
-idempotent payments, background work, real-time updates, safe schema changes and automated
-quality gates.
+It is built around the parts of ticketing that break under load: two people clicking the same seat in the same millisecond, a payment webhook that arrives twice or arrives late, a hold that expires while the card is being charged, and a ticket that gets scanned twice at two different doors. Each of those cases has a test that reproduces it.
 
-```
-Django + DRF   FastAPI + SQLAlchemy 2   Django Channels   Celery   MySQL 8
-Redis          Meilisearch             Nginx + TLS        Docker   pytest/Hypothesis
-```
+The stack is Django 5 with Django REST Framework, FastAPI with SQLAlchemy 2, Django Channels, Celery, MySQL 8, Redis, Meilisearch and nginx, all started by one `docker compose` command.
 
----
+## Contents
+
+- [Quick start](#quick-start)
+- [What it does](#what-it-does)
+- [How it is built](#how-it-is-built)
+- [Using the API](#using-the-api)
+- [Tests and quality gates](#tests-and-quality-gates)
+- [Load test results](#load-test-results)
+- [Configuration](#configuration)
+- [Running it in production](#running-it-in-production)
+- [Project layout](#project-layout)
+- [Further reading](#further-reading)
+- [License](#license)
 
 ## Quick start
 
-Prerequisites: Docker Desktop (or Docker Engine + Compose v2). Nothing else.
+You need Docker Desktop, or Docker Engine with Compose v2. Nothing else has to be installed on the host to run the app.
 
 ```bash
+git clone https://github.com/i-wajidrashid/ticketforge.git
+cd ticketforge
 cp .env.example .env
-docker compose up --build
-```
-
-| URL | What |
-|---|---|
-| <https://localhost> | The site (self-signed cert — your browser will warn once) |
-| <https://localhost/api/docs> | FastAPI OpenAPI docs |
-| <https://localhost/org/api/docs/> | Organizer API docs (DRF + drf-spectacular) |
-| <https://localhost/admin/> | Django admin (`ADMIN_URL` is configurable) |
-| <http://localhost:8025> | Mailpit — every email the app sends |
-| <http://localhost:7700> | Meilisearch |
-
-Seed a realistic dataset (events, customers, paid orders, refunds, check-ins):
-
-```bash
+docker compose up -d --build
 docker compose exec web python manage.py seed_demo_data --orders 400
 ```
 
-Demo logins (created by the seed command):
+The first build takes a few minutes. When it finishes:
 
-| Role | Email | Password |
-|---|---|---|
-| Organizer | `organizer@ticketforge.local` | `ticketforge123` |
-| Customer | `fan000@ticketforge.local` … `fan119@…` | `ticketforge123` |
+| URL | What it is |
+|---|---|
+| https://localhost | The site. The certificate is self-signed, so the browser warns once. |
+| https://localhost/org/ | Organizer dashboard, refunds and the door scanner |
+| https://localhost/api/docs | Public and checkout API (FastAPI, OpenAPI) |
+| https://localhost/org/api/docs/ | Organizer API (DRF, drf-spectacular) |
+| https://localhost/admin/ | Django admin. The path is set by `ADMIN_URL`. |
+| http://localhost:8025 | Mailpit, which catches every email the app sends |
 
-Payments run against a **deterministic fake Stripe gateway** out of the box, so checkout works
-offline. Set a real `sk_test_…` key in `.env` to use Stripe test mode instead. The
-`/api/v1/dev/simulate-payment/{order_id}` helper exists only while the fake gateway is active.
+The seed command creates these accounts. All of them use the password `ticketforge123`.
 
----
+| Role | Email |
+|---|---|
+| Organizer | `organizer@ticketforge.local` |
+| Fans | `fan000@ticketforge.local` to `fan119@ticketforge.local` |
 
-## What works
+The admin needs a superuser of its own: `docker compose exec web python manage.py createsuperuser`.
 
-- **Accounts** — email signup, verification, login, password reset, JWT access (15 min) +
-  refresh (7 days), rate-limited login (5 failures / 15 min per IP+account).
-- **Events** — organizer CRUD, draft → published → on sale → finished/cancelled lifecycle,
-  ticket types, general admission or reserved seating, cover images.
-- **Search** — Meilisearch full text with typo tolerance, city/category/date/price filters and
-  sorting; index updates are queued from Django signals on commit.
-- **Checkout** — 10-minute holds, conditional-update seat locking, idempotent payments,
-  Stripe webhook ledger, automatic late-payment refunds.
-- **Tickets** — HMAC-signed QR tokens, PDF tickets emailed and downloadable, single scan.
-- **Refunds** — customer request → organizer approve/reject → Stripe refund → seats returned.
-- **Real time** — live seat maps, hold countdown, organizer sales counter over WebSockets.
-- **Reports** — Jupyter notebook over read-only SQL (sales by hour, sell-through, drop-off,
-  refunds, no-shows, price sensitivity).
-- **Ops** — structured JSON logs with request ids, `/health` + `/ready`, Sentry-ready,
-  Celery Beat schedule, dead-letter handling, zero-downtime migration guidance.
+Payments go through a deterministic fake Stripe gateway by default, so checkout works offline and without a Stripe account. Put a real `sk_test_` key in `.env` to use Stripe test mode instead (see [Configuration](#configuration)).
 
----
+`make help` lists every shortcut (`make up`, `make seed`, `make logs`, `make test` and so on).
 
-## Architecture
+## What it does
+
+**For fans**
+
+- Sign up, verify the email address, log in, reset a forgotten password. After 5 failed logins in 15 minutes the account is locked for the rest of that window, whether the attempts came from one address or many.
+- Browse and search events. Search runs on Meilisearch with typo tolerance and filters for city, category, date and price, and falls back to a database `LIKE` query if Meilisearch is down.
+- Pick seats on a live seat map or choose a quantity of general admission tickets. When someone else takes a seat, it is marked as taken on every open seat map without a page refresh.
+- Hold the selection for 10 minutes with a visible countdown, then pay.
+- Get the tickets by email as a PDF with a QR code, and download them again from the account page.
+- Request a refund, unless a ticket on the order has already been scanned at the door.
+
+**For organizers**
+
+- Create venues, sections and seats (one at a time or as a CSV upload), events and ticket types through the organizer API.
+- Publish or cancel events. Cancelling refunds every paid order.
+- See revenue, tickets sold, check-ins, a daily revenue chart and recent sales on the dashboard. New sales appear live.
+- Approve or reject refund requests.
+- Add door staff by email, and scan tickets at `/org/scan/` with the camera (where the browser supports `BarcodeDetector`) or a keyboard-wedge scanner.
+
+**For operators**
+
+- Structured JSON logs with a request id on every line.
+- Liveness and readiness endpoints (`/api/v1/health`, `/api/v1/ready`, `/health/`).
+- A Celery Beat schedule that releases expired holds every 30 seconds, reconciles payments with Stripe at 02:00, marks finished events every hour and sends event reminders at 09:00 local time.
+- A Jupyter notebook with read-only SQL reports: sales by hour, sell-through, hold-to-order conversion, refunds, no-shows and price against sell-through.
+
+## How it is built
 
 ```mermaid
 flowchart LR
-    B[Browser] --> N[Nginx · TLS · rate limits]
-    N --> W[Django + DRF<br/>site, admin, organizer API]
-    N --> A[FastAPI<br/>public API, holds, checkout]
-    N --> C[Django Channels<br/>WebSockets]
-    W --> MC[(MySQL · core)]
-    A --> MK[(MySQL · checkout)]
-    W -. read-only .-> MK
-    A -. read-only .-> MC
+    B[Browser] --> N[nginx: TLS and rate limits]
+    N --> W[web: Django and DRF]
+    N --> A[api: FastAPI]
+    N --> C[realtime: Channels]
+    W --> MC[(MySQL core)]
+    A --> MK[(MySQL checkout)]
+    W -. reads .-> MK
+    A -. reads .-> MC
     W --> R[(Redis)]
     A --> R
     C --> R
-    R --> CW[Celery workers + beat]
+    R --> CW[Celery worker and beat]
     CW --> M[Meilisearch]
     W --> M
 ```
 
-**Service ownership.** `core` is written only by Django (migrations own the schema). `checkout`
-is written only by FastAPI (Alembic owns the schema). Each side reads the other's tables
-read-only — one writer per table, two migration tools that never fight.
+There are two MySQL schemas and each has exactly one writer. Django owns `core` (users, venues, events, ticket types) and its migrations. FastAPI owns `checkout` (seat inventory, holds, orders, tickets, refunds, the webhook ledger) and Alembic migrates it. Each service reads the other's tables with plain SQL and never writes to them. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains why, and walks through every request.
 
-**Why two databases?** It forces the boundary that real teams need: the checkout path can scale
-and deploy independently, and schema changes on one side cannot block the other. The full
-rationale is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+### A seat can only be sold once
 
-### The no-double-selling rule
-
-Every seat transition is a conditional update; the affected-row count is the lock:
+Every seat change is a conditional `UPDATE`, and the number of rows it touched decides who won:
 
 ```sql
 UPDATE event_seat
 SET status = 'held', hold_id = :hold_id, version = version + 1
-WHERE id = :seat_id AND status = 'available';
+WHERE event_id = :event_id AND seat_id = :seat_id AND status = 'available';
 ```
 
-`rowcount == 1` → you own the seat. `rowcount == 0` → someone beat you, the whole hold rolls
-back and the API returns `409 SeatUnavailable`. Multi-seat holds update seats in ascending id
-order to avoid deadlocks. General admission uses the same trick with `available >= :qty`.
+One row updated means the seat is yours. Zero rows means someone else got there first: the whole hold rolls back and the API answers `409 SEAT_UNAVAILABLE`. Seats in a multi-seat hold are always updated in ascending id order, so two overlapping holds cannot deadlock. General admission uses the same pattern with `WHERE available >= :quantity`, backed by a `CHECK (available >= 0)` constraint.
 
-Proven by `tests/test_concurrency.py`: 50 threads, one seat, exactly one winner.
+`tests/test_concurrency.py` starts 50 threads that all try to hold the same seat at once and checks that exactly one succeeds. A second test does the same with 40 threads against a small general admission pool.
 
-### Idempotency everywhere
+### Paying is safe to retry
 
-| Layer | Mechanism |
+| Step | What makes a repeat harmless |
 |---|---|
-| Payment start | `orders.idempotency_key` UNIQUE (also forwarded to Stripe) |
-| Webhooks | `stripe_event.stripe_event_id` UNIQUE — the insert *is* the dedupe |
-| Refunds | `refund.stripe_refund_id` UNIQUE + state machine |
-| Tasks | IDs only, retry-safe, `acks_late` |
+| Starting a payment | The `Idempotency-Key` header is stored with a `UNIQUE` index and forwarded to Stripe. The same key returns the same order. |
+| One order per hold | `orders.hold_id` is `UNIQUE`, so a hold can be paid once even with different keys. |
+| Stripe webhooks | The event id is inserted into a ledger table with a `UNIQUE` index, in the same transaction as the order change. A duplicate delivery inserts nothing and does nothing. |
+| Refunds | The Stripe refund id is `UNIQUE`, and refund states only move forward. |
+| Background tasks | Tasks take ids, not objects, and run with `acks_late` so a crashed worker's task is redelivered. |
 
-### Holds and expiry
+Stripe's own guidance is the basis for this: the [idempotent requests](https://docs.stripe.com/api/idempotent_requests) reference, and the [webhooks guide](https://docs.stripe.com/webhooks), which warns that the same event can be delivered more than once and that events can arrive out of order.
 
-Holds live 10 minutes. Celery Beat releases expired holds every 30 seconds **and** checkout
-re-checks expiry before charging, so a slow sweeper can never charge for a lost seat. If a
-payment succeeds after the seat was resold, the order is refunded automatically and the customer
-gets an email.
+### A hold that expires while you pay
 
----
+Holds last 10 minutes. Celery Beat releases expired ones every 30 seconds, and checkout checks the expiry again inside its own transaction, so a slow sweeper never lets an expired hold be charged. If a payment still succeeds after the hold ran out (the card took too long, say), the webhook handler tries to take the same seats again inside a savepoint. If they are still free the order goes through. If someone else bought them, the payment is refunded automatically and the customer gets an email explaining what happened.
 
-## Quality gates
+## Using the API
+
+This is a real session against the local stack, trimmed for length. The access token lasts 15 minutes and the refresh token 7 days.
 
 ```bash
-make test        # pytest (112 tests)
-make lint        # ruff check + format check
-make typecheck   # mypy (strict for api/common/worker, standard for web)
-make coverage    # pytest --cov, fails under 85%
-make check       # all of the above
+# 1. Log in (Django issues the JWT that FastAPI accepts)
+curl -sk https://localhost/accounts/api/token/ \
+  -H 'Content-Type: application/json' \
+  -d '{"email": "fan011@ticketforge.local", "password": "ticketforge123"}'
+# {"access": "eyJ...", "refresh": "eyJ...", "token_type": "Bearer", "expires_in": 900, "user": {...}}
+
+# 2. Hold two general admission tickets
+curl -sk https://localhost/api/v1/holds \
+  -H "Authorization: Bearer $ACCESS" -H 'Content-Type: application/json' \
+  -d '{"event_id": 2, "ticket_type_id": 3, "quantity": 2}'
+# {"id": "df59dad0-...", "status": "active", "seconds_left": 599, "total_cents": 7000, ...}
+
+# A second hold on the same event is refused while the first is active
+# {"error": {"code": "HOLD_EXISTS", "message": "You already have an active hold for this event.", "details": {}}}
+
+# 3. Start the payment. Sending the same Idempotency-Key again returns the same order.
+curl -sk -X POST https://localhost/api/v1/checkout/$HOLD_ID/pay \
+  -H "Authorization: Bearer $ACCESS" -H "Idempotency-Key: $(uuidgen)"
+# {"order_id": "3e5eb4bc-...", "payment_intent_id": "pi_fake_...", "amount_cents": 7000, "status": "pending"}
+
+# 4. Local only: make the fake gateway send the "payment succeeded" webhook
+curl -sk -X POST https://localhost/api/v1/dev/simulate-payment/$ORDER_ID \
+  -H "Authorization: Bearer $ACCESS"
+# {"status": "processed", "result": "fulfilled", "order_id": "3e5eb4bc-..."}
+
+# 5. The order is paid and has two tickets
+curl -sk https://localhost/api/v1/me/orders -H "Authorization: Bearer $ACCESS"
 ```
+
+Seated events take `"seat_ids": [...]` instead of a quantity. Every error from either service, including unknown routes, has the same shape, `{"error": {"code", "message", "details"}}`. [docs/API.md](docs/API.md) lists every endpoint, every error code, and the organizer calls for creating and publishing an event.
+
+## Tests and quality gates
+
+```bash
+make setup                                  # uv virtualenv with the dev dependencies
+docker compose up -d mysql redis search     # the tests use real services
+make check                                  # ruff, mypy and pytest with coverage
+```
+
+There are 227 tests. They run against real MySQL and Redis, not SQLite or mocks, because the locking behaviour being tested only exists in the real database. Coverage is 92% overall and 100% for the two files that matter most, `api/app/services/holds.py` and `api/app/services/payments.py`. The build fails below 85%.
 
 What the suite covers:
 
-- 50-thread concurrency races for seats and inventory;
-- Hypothesis property test over random hold/cancel/expire histories;
-- webhook replay, out-of-order and late-payment scenarios;
-- double-scan rejection with the first scan timestamp;
-- JWT auth, organizer object-scoping, rate limiting;
-- WebSocket consumers (auth, ticks, broadcast, ownership);
-- real MySQL/Redis/Meilisearch in every run — no SQLite shortcuts.
+- 50 threads racing for one seat, and 40 buyers racing for a general admission pool smaller than the crowd.
+- A [Hypothesis](https://hypothesis.readthedocs.io/) property test that runs random sequences of hold, cancel and expire, then checks that every seat is in exactly one state, every held seat belongs to an active hold, and no user ends up with two active holds for one event.
+- Webhook replays, out-of-order events, and a payment that lands after its hold expired.
+- A second scan of the same ticket, which is rejected with the time of the first scan.
+- JWT handling, organizer data scoping, venue edit rules and login throttling.
+- WebSocket consumers: authentication, the countdown tick, broadcasts and hold ownership.
+- The organizer figures, including an order with several tickets that must be counted once.
+- Settings that refuse to start with development secrets when debug is off.
+- A Content Security Policy that forbids inline code, plus a check that no template needs it.
 
-Current coverage: **86%+ overall**, `api/app/services/holds.py` 94%,
-`api/app/services/payments.py` 88%. CI fails below 85%.
+CI (`.github/workflows/ci.yml`) runs ruff, mypy, a check that no Django migration or Alembic revision is missing, the full test suite with the coverage gate, `pip-audit`, and a Docker image build.
 
-Static analysis: `ruff` (lint + format), `mypy` (strict on the service layer), `pre-commit`,
-`pip-audit`, `makemigrations --check`, `alembic check`, and a Docker build on every PR.
+## Load test results
 
----
+`locustfile.py` simulates fans browsing before a big on-sale: anonymous requests for the event list, event pages, seat maps and search, weighted 5:3:2:1, with each simulated user waiting 0.5 to 2 seconds between requests. Checkout is not part of it, because 500 buyers would sell out the demo venues in seconds and the test would then only measure "sold out". The race conditions in checkout are covered by the concurrency tests instead.
 
-## Load test
+Measured on an Apple M2 MacBook Air (8 cores) with Docker given 8 CPUs and 8 GB of memory, and Locust running on the same machine:
+
+| Run | Requests/s | Median | p95 | p99 | Failures |
+|---|---|---|---|---|---|
+| 500 users, 90 s | 379 | 9 ms | 84 ms | 250 ms | 0 |
+| 1000 users, 4 Locust processes | 465 | 700 ms | 1.8 s | 2.5 s | 0 |
+
+At 500 users the system is comfortable. At 1000 users it is saturated: the Docker VM tops out at roughly 290% CPU and requests queue. With this think time, 500 users can only generate about 400 requests per second, so the first row is close to the most that profile can ask for. Before the catalogue cache and the read-only seat map (see [docs/DECISIONS.md](docs/DECISIONS.md)) the same 500-user run managed about 250 requests per second with a p95 of 2.8 seconds.
+
+To run it yourself:
 
 ```bash
-make loadtest   # locust -f locustfile.py --host https://localhost
-# open http://localhost:8089, ramp to 500 users
+make loadtest-on        # raise the per-IP edge limit, which a single-machine test would trip
+make loadtest-headless  # 500 users for 90 seconds, prints the summary
+make loadtest-off       # put the production limit back
 ```
 
----
+The `loadtest-on` step matters. nginx allows 20 requests per second per IP address, and every Locust user comes from the same address, so without it most requests are rejected with `503` by design. See [docs/OPERATIONS.md](docs/OPERATIONS.md#load-testing) for details.
 
-## Report notebook
+## Configuration
 
-```bash
-docker compose exec web python manage.py seed_demo_data --orders 800
-uv run --with jupyter jupyter lab notebooks/sales_report.ipynb
-```
+Everything is configured through environment variables, read from `.env` by Docker Compose. `.env.example` lists them with working local values. The ones you are most likely to change:
 
-The notebook connects read-only and answers: when do people buy, how fast events sell out,
-hold → paid conversion, refund rate by category, no-show rate and price vs sell-through.
+| Variable | Default | Purpose |
+|---|---|---|
+| `DJANGO_DEBUG` | `1` in `.env.example`, off if unset | Debug pages. With it off, Django refuses to start on development secrets. |
+| `DJANGO_SECRET_KEY`, `JWT_SECRET`, `QR_SECRET` | development values | Sign sessions, API tokens and ticket QR codes. Use 32 random characters or more. |
+| `DJANGO_ALLOWED_HOSTS`, `SITE_ORIGIN` | `localhost` | Your domain. `SITE_ORIGIN` is used in emails and the CORS allow-list. |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | placeholders | Stripe test mode keys. |
+| `STRIPE_GATEWAY` | `auto` | `fake`, `live`, or `auto` (real Stripe only when a real-looking `sk_test_` key is set). |
+| `TIME_ZONE` | `Asia/Karachi` | Time zone for showing times on tickets and in emails. Storage is always UTC. |
+| `ADMIN_URL` | `admin/` | Path of the Django admin. |
+| `HOLD_TTL_MINUTES` | `10` | How long a hold lasts. |
+| `HOLD_RATE_LIMIT_PER_MINUTE` | `10` | Holds a user can create per minute. |
+| `CATALOGUE_CACHE_SECONDS` | `5` | How long the API may serve the event list and event pages from memory. `0` turns it off. |
+| `UVICORN_WORKERS`, `GUNICORN_WORKERS`, `CELERY_CONCURRENCY` | `4`, `3`, `4` | Process counts. |
 
----
+## Running it in production
+
+The repository ships a production overlay. Read [docs/OPERATIONS.md](docs/OPERATIONS.md) and [SECURITY.md](SECURITY.md) first; the short version is:
+
+1. Generate new values for `DJANGO_SECRET_KEY`, `JWT_SECRET` and `QR_SECRET`, for example with `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+2. Set `DJANGO_ALLOWED_HOSTS`, `SITE_ORIGIN`, real SMTP settings and real Stripe keys.
+3. Mount a real certificate over the self-signed one that the nginx image generates at build time (see [docs/OPERATIONS.md](docs/OPERATIONS.md#tls-certificates)).
+4. Start the stack with the overlay:
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+   ```
+
+The overlay forces debug off for every Django process, stops publishing the MySQL, Redis, Meilisearch and Mailpit ports so only nginx is reachable from outside, and creates the database user without the extra rights the test suite needs. Because debug is off, the `migrate` step refuses to run on development secrets, and every other service waits for `migrate`, so a stack with default secrets does not come up at all. That is deliberate.
 
 ## Project layout
 
 ```
 ticketforge/
-├── web/                    # Django: site, admin, organizer API, Channels consumers
-│   ├── accounts/ events/ venues/ organizers/ realtime/
-│   ├── config/             # settings, urls, asgi, errors, context
-│   ├── templates/ static/  # server-rendered UI + seat-map JS
+├── web/                 Django: pages, admin, accounts, organizer API, WebSocket consumers
+│   ├── accounts/        signup, login, JWT, throttling, the account page
+│   ├── events/          events, ticket types, public pages, seed command
+│   ├── venues/          venues, sections, seats
+│   ├── organizers/      organizer API, dashboard, refunds, scanner page
+│   ├── realtime/        Channels consumers for seat maps, holds and sales
+│   ├── config/          settings, URLs, ASGI and WSGI, the error envelope
+│   ├── templates/       server-rendered HTML
+│   ├── static/          CSS and the small amount of JavaScript the pages need
 │   └── tests/
-├── api/                    # FastAPI: public API, holds, checkout, webhooks, scanning
-│   ├── app/{routers,services,schemas,models,core_repo}
-│   ├── alembic/            # owns the checkout schema
-│   └── tests/              # shared suite lives in /tests
-├── worker/                 # Celery app, tasks, PDF ticket rendering
-├── common/                 # JWT/QR signing, env helpers, search, logging, realtime names
-├── tests/                  # integration + property + concurrency tests
-├── deploy/nginx/           # TLS, proxies, WebSocket upgrade
-├── docker/                 # entrypoint + MySQL bootstrap
-├── notebooks/              # sales_report.ipynb
-├── docs/                   # architecture, operations, decisions
-├── docker-compose.yml      # the whole system, one command
-├── Dockerfile
-├── pyproject.toml          # deps, ruff, mypy, pytest, coverage
+├── api/                 FastAPI: catalogue, holds, checkout, webhooks, scanning
+│   ├── app/routers/     HTTP endpoints
+│   ├── app/services/    all business rules live here
+│   ├── app/core_repo.py read-only SQL against the core schema
+│   └── alembic/         migrations for the checkout schema
+├── worker/              Celery app, tasks and the PDF ticket renderer
+├── common/              code both services share: JWT and QR signing, env, search, logging
+├── tests/               concurrency, property, payment, webhook and API tests
+├── deploy/nginx/        TLS, proxying, WebSocket upgrade, rate limits
+├── docker/              container entrypoint and the MySQL bootstrap script
+├── notebooks/           sales_report.ipynb
+├── docs/                architecture, API, operations and design decisions
+├── docker-compose.yml   the whole system
+├── docker-compose.prod.yml       production overlay
+├── docker-compose.loadtest.yml   load test overlay
 ├── locustfile.py
-├── Makefile
-└── .github/workflows/ci.yml
+└── Makefile
 ```
 
----
+## Further reading
 
-## Production notes
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): services, data ownership, every request flow, failure modes.
+- [docs/API.md](docs/API.md): endpoints, authentication, error codes, worked examples.
+- [docs/OPERATIONS.md](docs/OPERATIONS.md): deploying, migrations, backups, load testing, incidents, rotating secrets.
+- [docs/DECISIONS.md](docs/DECISIONS.md): the design decisions, what each one costs, and the sources behind them.
+- [CONTRIBUTING.md](CONTRIBUTING.md): development setup and the rules the codebase follows.
+- [SECURITY.md](SECURITY.md): reporting vulnerabilities and hardening a deployment.
+- [CHANGELOG.md](CHANGELOG.md): what changed between versions.
 
-- Set real secrets (`DJANGO_SECRET_KEY`, `JWT_SECRET`, `QR_SECRET`, Stripe keys); never commit `.env`.
-- Use managed MySQL/Redis or the provided containers with backups **and a tested restore**.
-- Migrations run as a separate step before new code (the `migrate` service does exactly this).
-  Schema changes follow expand → backfill → switch reads → contract.
-- Nginx terminates TLS and applies a global rate limit; per-user limits live in Redis.
-- Logs are JSON with a `request_id`; wire them to your aggregator and Sentry (`SENTRY_DSN` ready).
-- `/health` is liveness, `/ready` checks MySQL + Redis.
-- For a production-style start use the overlay:
-  `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d`
+The sales report notebook runs against the seeded data:
 
----
-
-## References
-
-Design choices follow these well-established practices:
-
-- [Stripe: idempotent requests](https://docs.stripe.com/api/idempotent_requests) and
-  [webhook best practices](https://docs.stripe.com/webhooks#best-practices)
-  (duplicate-safe consumers: [webhook replay handling](https://safeguard.sh/resources/blog/webhook-consumer-replay-and-duplicate-event-handling))
-- [Django database transactions](https://docs.djangoproject.com/en/stable/topics/db/transactions/)
-- [Django Channels deployment](https://channels.readthedocs.io/en/stable/deployment.html)
-- [SQLAlchemy 2.0 ORM](https://docs.sqlalchemy.org/en/20/orm/)
-- [Meilisearch filtering & sorting](https://www.meilisearch.com/docs/learn/filtering_and_sorting/filter_search_results)
-- [Hypothesis](https://hypothesis.readthedocs.io/) for property-based testing of the invariants
-- [The Twelve-Factor App](https://12factor.net/) for configuration and process model
-
----
+```bash
+uv run --with jupyter --with pandas --with matplotlib jupyter lab notebooks/sales_report.ipynb
+```
 
 ## License
 
-MIT. Have fun.
+[MIT](LICENSE). The two bundled typefaces, Big Shoulders Display and Schibsted Grotesk, are under the SIL Open Font License 1.1; their license files are next to the fonts in `web/static/fonts/`.

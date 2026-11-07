@@ -6,15 +6,23 @@ from datetime import UTC, date, datetime, time
 from typing import Annotated, Any
 
 from common.search import build_filters, search_events
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response
 
 from api.app import core_repo
+from api.app.cache import TTLCache
 from api.app.config import settings
 from api.app.schemas import EventListOut, EventOut, SeatMapOut, SeatOut, SectionOut, TicketTypeOut
 from api.app.services import inventory
 from api.app.services.errors import DomainError
 
 router = APIRouter(tags=["public"])
+
+# Entries are the finished JSON bytes: a cache hit skips the database *and*
+# FastAPI's response-model validation and encoding, which dominate CPU time
+# once the queries are cached.
+list_cache: TTLCache[bytes] = TTLCache(lambda: settings.catalogue_cache_seconds)
+detail_cache: TTLCache[bytes | None] = TTLCache(lambda: settings.catalogue_cache_seconds)
+JSON = "application/json"
 
 
 class SearchUnavailable(DomainError):
@@ -28,12 +36,12 @@ def _cover_url(path: str | None) -> str | None:
     return f"{settings.site_origin}/media/{path}"
 
 
-def _ticket_types(event_id: int) -> list[TicketTypeOut]:
-    return [TicketTypeOut.model_validate(t) for t in core_repo.ticket_types_for_event(event_id)]
-
-
-def _event_out(event: core_repo.EventRow) -> EventOut:
-    ticket_types = _ticket_types(event.id)
+def _event_out(
+    event: core_repo.EventRow, rows: list[core_repo.TicketTypeRow] | None = None
+) -> EventOut:
+    if rows is None:
+        rows = core_repo.ticket_types_for_event(event.id)
+    ticket_types = [TicketTypeOut.model_validate(t) for t in rows]
     return EventOut(
         id=event.id,
         title=event.title,
@@ -51,20 +59,36 @@ def _event_out(event: core_repo.EventRow) -> EventOut:
     )
 
 
-@router.get("/events", response_model=EventListOut)
-def list_events(cursor: int | None = None, limit: int = 20) -> EventListOut:
+def _event_list(cursor: int | None, limit: int) -> EventListOut:
     events, next_cursor = core_repo.list_events(cursor=cursor, limit=limit)
-    return EventListOut(items=[_event_out(event) for event in events], next_cursor=next_cursor)
+    types = core_repo.ticket_types_for_events([event.id for event in events])
+    return EventListOut(
+        items=[_event_out(event, types[event.id]) for event in events], next_cursor=next_cursor
+    )
+
+
+@router.get("/events", response_model=EventListOut)
+def list_events(cursor: int | None = None, limit: int = 20) -> Response:
+    limit = max(1, min(limit, 100))
+    body = list_cache.get_or_set(
+        ("events", cursor, limit), lambda: _event_list(cursor, limit).model_dump_json().encode()
+    )
+    return Response(content=body, media_type=JSON)
+
+
+def _event_detail(slug: str) -> bytes | None:
+    event = core_repo.get_event_by_slug(slug)
+    return _event_out(event).model_dump_json().encode() if event is not None else None
 
 
 @router.get("/events/{slug}", response_model=EventOut)
-def get_event(slug: str) -> EventOut:
+def get_event(slug: str) -> Response:
     from api.app.services.errors import NotFound
 
-    event = core_repo.get_event_by_slug(slug)
-    if event is None:
+    body = detail_cache.get_or_set(("event", slug), lambda: _event_detail(slug))
+    if body is None:
         raise NotFound("Event not found.")
-    return _event_out(event)
+    return Response(content=body, media_type=JSON)
 
 
 @router.get("/events/{slug}/seats", response_model=SeatMapOut)
@@ -76,7 +100,7 @@ def get_seat_map(slug: str) -> SeatMapOut:
         raise NotFound("Event not found.")
     sections = [
         SectionOut(name=section["name"], seats=[SeatOut(**seat) for seat in section["seats"]])
-        for section in inventory.seat_map(event.id)
+        for section in inventory.seat_map(event.id, known_to_exist=True)
     ]
     return SeatMapOut(event_id=event.id, sections=sections)
 

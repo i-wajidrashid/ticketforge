@@ -1,0 +1,56 @@
+{% load tf %}<li class="order-card" data-order="{{ card.order.id }}">
+  {% if card.event %}{% include "components/poster.html" with event=card.event size="thumb" %}{% endif %}
+  <div>
+    <div class="order-card-head">
+      <div>
+        <h3>{% if card.event %}<a href="{% url 'events:detail' card.event.slug %}">{{ card.event.title }}</a>{% else %}Event no longer listed{% endif %}</h3>
+        {% if card.event %}<p class="muted small">{{ card.event.starts_at|date:"l j F Y, H:i" }}, {{ card.event.venue.name }}</p>{% endif %}
+      </div>
+      <span data-order-status>
+        {% if card.order.status == "refunded" %}<span class="tag">Refunded</span>
+        {% elif card.refund.status == "requested" or card.refund.status == "processing" %}<span class="tag tag-warn">Refund requested</span>
+        {% elif card.refund.status == "rejected" %}<span class="tag">Refund declined</span>
+        {% else %}<span class="tag tag-ok">Paid</span>{% endif %}
+      </span>
+    </div>
+  </div>
+
+  <ul class="ticket-lines">
+    {% for ticket in card.tickets %}
+      <li class="ticket-line">
+        <span class="ticket-line-name">
+          <strong>{{ ticket.type_name }}</strong>
+          <span class="muted">{% if ticket.seat %}{{ ticket.seat }}{% else %}General admission{% endif %}</span>
+        </span>
+        {% if ticket.status == "valid" %}
+          <a class="btn btn-sm btn-secondary" href="{% url 'accounts:ticket-pdf' ticket.id %}" download>Download PDF</a>
+        {% elif ticket.status == "checked_in" %}
+          <span class="cluster"><span class="tag tag-ok">Scanned {{ ticket.checked_in_at|date:"H:i" }}</span><a class="link-btn small" href="{% url 'accounts:ticket-pdf' ticket.id %}" download>PDF</a></span>
+        {% else %}
+          <span class="tag">{{ ticket.status|capfirst }}</span>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+
+  <div class="order-card-foot">
+    <span class="muted">{{ card.tickets|length }} ticket{{ card.tickets|length|pluralize }}, {{ card.order.total_cents|money:card.order.currency }} paid {{ card.order.created_at|date:"j M Y" }}. Order {{ card.order.id|slice:":8"|upper }}</span>
+    {% if card.can_refund %}
+      <button class="link-btn small" type="button" data-refund-toggle aria-expanded="false" aria-controls="refund-{{ card.order.id }}">Request a refund</button>
+    {% endif %}
+  </div>
+
+  {% if card.can_refund %}
+    <form class="refund-form" id="refund-{{ card.order.id }}" data-refund-form hidden>
+      <label class="field">
+        <span class="field-label">Why do you need a refund? (optional)</span>
+        <textarea name="reason" maxlength="255" rows="2" placeholder="Helps the organizer decide quickly"></textarea>
+      </label>
+      <p class="small muted">The organizer reviews every request. If they approve it you get {{ card.order.total_cents|money:card.order.currency }} back to your card and these tickets stop working.</p>
+      <div class="cluster">
+        <button class="btn btn-sm" type="submit">Send refund request</button>
+        <button class="btn btn-sm btn-secondary" type="button" data-refund-cancel>Keep my tickets</button>
+      </div>
+    </form>
+  {% endif %}
+</li>

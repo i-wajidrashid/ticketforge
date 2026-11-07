@@ -1,56 +1,83 @@
-{% load static %}
-<!doctype html>
+{% load static tf %}<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>{% block title %}TicketForge{% endblock %}</title>
-  <meta name="description" content="TicketForge — live events, real seats, no double selling.">
-  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+  <meta name="description" content="{% block description %}Tickets for gigs, comedy, talks and sport. Pick your seat on a live map and get a ticket that scans once at the door.{% endblock %}">
+  <meta name="theme-color" content="#fcfcfa">
+  <link rel="icon" href="{% static 'img/favicon.svg' %}" type="image/svg+xml">
+  <link rel="preload" href="{% static 'fonts/big-shoulders-display.woff2' %}" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="{% static 'fonts/schibsted-grotesk.woff2' %}" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="{% static 'css/app.css' %}?v={{ asset_version }}">
   {% block head %}{% endblock %}
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
+  <a class="skip-link" href="#main">Skip to content</a>
+
   <header class="site-header">
-    <a class="brand" href="{% url 'events:index' %}">
-      <span class="brand-mark">TF</span>
-      <span>TicketForge</span>
-    </a>
-    <form class="nav-search" action="{% url 'events:index' %}" method="get" role="search">
-      <input type="search" name="q" value="{{ request.GET.q }}" placeholder="Search events, venues, cities…" aria-label="Search events">
-    </form>
-    <nav class="nav-links">
-      {% if user.is_authenticated %}
-        <a href="{% url 'accounts:account' %}">Account</a>
-        <form action="{% url 'accounts:logout' %}" method="post" class="inline">
-          {% csrf_token %}
-          <button class="link-button" type="submit">Log out</button>
-        </form>
-      {% else %}
-        <a href="{% url 'accounts:login' %}">Log in</a>
-        <a class="button button-small" href="{% url 'accounts:signup' %}">Sign up</a>
-      {% endif %}
-    </nav>
+    <div class="wrap">
+      <a class="wordmark" href="{% url 'events:index' %}">
+        <img src="{% static 'img/mark.svg' %}" alt="" width="30" height="30">
+        <span>TicketForge</span>
+      </a>
+
+      <form class="header-search" action="{% url 'events:index' %}" method="get" role="search">
+        {% icon "search" %}
+        <label class="visually-hidden" for="header-q">Search events</label>
+        <input id="header-q" type="search" name="q" value="{{ request.GET.q }}" placeholder="Search events, venues, artists" autocomplete="off">
+      </form>
+
+      <nav class="primary-nav" aria-label="Main">
+        {% if user.is_authenticated %}
+          {% if nav_is_organizer %}
+            <a class="nav-link hide-sm" href="{% url 'organizer:dashboard' %}" {% if request.resolver_match.namespace == 'organizer' %}aria-current="page"{% endif %}>Dashboard</a>
+          {% endif %}
+          {% if nav_can_scan %}
+            <a class="nav-link hide-sm" href="{% url 'organizer:scan' %}" {% if request.resolver_match.url_name == 'scan' %}aria-current="page"{% endif %}>Scan tickets</a>
+          {% endif %}
+          <a class="nav-link" href="{% url 'accounts:account' %}" {% if request.resolver_match.url_name == 'account' %}aria-current="page"{% endif %}>My tickets</a>
+          <form class="nav-form" action="{% url 'accounts:logout' %}" method="post">
+            {% csrf_token %}
+            <button class="nav-link" type="submit">Log out</button>
+          </form>
+        {% else %}
+          <a class="nav-link" href="{% url 'accounts:login' %}{% if request.path != '/' %}?next={{ request.get_full_path|urlencode }}{% endif %}">Log in</a>
+          <a class="btn btn-sm" href="{% url 'accounts:signup' %}">Sign up</a>
+        {% endif %}
+      </nav>
+    </div>
   </header>
 
-  {% if messages %}
-    <div class="flash-stack">
-      {% for message in messages %}
-        <div class="flash flash-{{ message.tags }}">{{ message }}</div>
-      {% endfor %}
+  <main id="main">
+    <div class="wrap {% block wrap_class %}{% endblock %}">
+      {% if messages %}
+        <div class="flash-region" role="status">
+          {% for message in messages %}
+            <div class="notice notice-{% if message.tags == 'error' %}error{% elif message.tags == 'success' %}success{% elif message.tags == 'warning' %}warning{% else %}info{% endif %}">
+              {% if message.tags == 'error' %}{% icon "alert" %}{% elif message.tags == 'success' %}{% icon "check" %}{% else %}{% icon "info" %}{% endif %}
+              <p>{{ message }}</p>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+      {% block content %}{% endblock %}
     </div>
-  {% endif %}
-
-  <main class="page">
-    {% block content %}{% endblock %}
   </main>
 
   <footer class="site-footer">
-    <span>TicketForge — Django · FastAPI · MySQL · Redis · Meilisearch · Celery</span>
-    <span>Prices in cents, timestamps in UTC.</span>
+    <div class="wrap">
+      <p>TicketForge. Times are shown in Karachi time.</p>
+      <nav class="footer-links" aria-label="Footer">
+        <a href="{% url 'events:index' %}">All events</a>
+        {% if user.is_authenticated %}<a href="{% url 'accounts:account' %}">My tickets</a>{% endif %}
+        <a href="/api/docs">Developer API</a>
+      </nav>
+    </div>
   </footer>
 
-  <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="{% static 'js/app.js' %}" defer></script>
+  <div class="toast-region" id="toasts" aria-live="polite" aria-atomic="false"></div>
+  <script src="{% static 'js/core.js' %}?v={{ asset_version }}" defer></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -10,4 +10,5 @@ RUN apk add --no-cache openssl \
  && chmod 600 /etc/nginx/certs/ticketforge.key
 
 COPY nginx.conf /etc/nginx/nginx.conf
+COPY limits.conf /etc/nginx/limits.conf
 COPY proxy_params_ticketforge.conf /etc/nginx/proxy_params_ticketforge.conf

@@ -122,6 +122,26 @@ def ticket_types_for_event(event_id: int) -> list[TicketTypeRow]:
     return [TicketTypeRow(**dict(row._mapping)) for row in _fetchall(sql, {"event_id": event_id})]
 
 
+def ticket_types_for_events(event_ids: list[int]) -> dict[int, list[TicketTypeRow]]:
+    """Ticket types for many events in one query (avoids N+1 on listings)."""
+    grouped: dict[int, list[TicketTypeRow]] = {event_id: [] for event_id in event_ids}
+    if not event_ids:
+        return grouped
+    placeholders = ", ".join(f":id{index}" for index in range(len(event_ids)))
+    # Only generated placeholder names are interpolated; the ids are bound.
+    sql = f"""
+        SELECT id, event_id, name, price_cents, currency, quantity_total,
+               sale_starts_at, sale_ends_at, max_per_order, inventory_mode
+        FROM core_ticket_type WHERE event_id IN ({placeholders})
+        ORDER BY event_id, price_cents
+    """  # noqa: S608
+    params: dict[str, object] = {f"id{index}": value for index, value in enumerate(event_ids)}
+    for row in _fetchall(sql, params):
+        ticket_type = TicketTypeRow(**dict(row._mapping))
+        grouped.setdefault(ticket_type.event_id, []).append(ticket_type)
+    return grouped
+
+
 def get_ticket_type(ticket_type_id: int) -> TicketTypeRow | None:
     sql = """
         SELECT id, event_id, name, price_cents, currency, quantity_total,
@@ -152,6 +172,22 @@ def get_user(user_id: int) -> UserRow | None:
     return UserRow(**dict(row._mapping)) if row else None
 
 
-def is_staff_for_event(user_id: int, event_id: int) -> bool:
-    sql = "SELECT 1 FROM core_staff_assignment WHERE user_id = :user_id AND event_id = :event_id LIMIT 1"
+def can_scan_event(user_id: int, event_id: int) -> bool:
+    """Door staff assigned to the event, the organizer who owns it, or an admin."""
+    sql = """
+        SELECT 1 FROM core_user u
+        WHERE u.id = :user_id AND u.is_active = 1 AND (
+            u.is_superuser = 1
+            OR u.role = 'admin'
+            OR EXISTS (
+                SELECT 1 FROM core_staff_assignment sa
+                WHERE sa.user_id = u.id AND sa.event_id = :event_id
+            )
+            OR EXISTS (
+                SELECT 1 FROM core_event e JOIN core_organizer o ON o.id = e.organizer_id
+                WHERE e.id = :event_id AND o.user_id = u.id
+            )
+        )
+        LIMIT 1
+    """
     return _fetchone(sql, {"user_id": user_id, "event_id": event_id}) is not None

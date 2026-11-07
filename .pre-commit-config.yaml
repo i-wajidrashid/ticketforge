@@ -1,28 +1,35 @@
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.6
-    hooks:
-      - id: ruff
-        args: [--fix]
-      - id: ruff-format
-
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
+        # Syntax only: Compose files use the custom `!reset` tag.
+        args: [--unsafe]
       - id: check-toml
       - id: check-merge-conflict
       - id: detect-private-key
       - id: check-added-large-files
         args: [--maxkb=1024]
 
+  # ruff and mypy run from the project's own environment (uv.lock), so the
+  # hooks always use the same versions as CI and `make check`.
   - repo: local
     hooks:
+      - id: ruff
+        name: ruff
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types: [python]
       - id: mypy
         name: mypy
-        entry: .venv/bin/mypy
+        entry: uv run mypy .
         language: system
         types: [python]
         pass_filenames: false

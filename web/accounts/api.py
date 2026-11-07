@@ -211,4 +211,6 @@ class PasswordResetConfirmView(APIView):
             )
         user.set_password(password)
         user.save(update_fields=["password"])
+        # The reset token proves who owns the account: end any lockout.
+        clear_login_failures(client_ip(request), user.email)
         return Response({"detail": "Password updated."})

@@ -50,6 +50,10 @@ class SeatOut(BaseModel):
     row: str
     number: str
     status: str
+    # Server-assigned pricing: the ticket type this seat sells as (None when the
+    # organizer's sections don't map to a type and the buyer must choose one).
+    ticket_type_id: int | None = None
+    price_cents: int | None = None
 
 
 class SectionOut(BaseModel):

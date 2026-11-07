@@ -49,6 +49,9 @@ def test_draft_and_started_events_cannot_be_held(seated_event, db_session, custo
 
 
 def test_multiple_seated_types_require_an_explicit_type(seated_event, db_session, customer):
+    # Neither type is named after the "Stalls" section, so pricing is ambiguous.
+    seated_event.ticket_type.name = "Standard"
+    seated_event.ticket_type.save(update_fields=["name"])
     TicketTypeFactory(
         event=seated_event.event, name="VIP", price_cents=9000, inventory_mode="seated"
     )

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+from urllib.parse import unquote
+
 import pytest
 from django.core import mail
 from django.urls import reverse
@@ -26,7 +29,11 @@ def test_signup_logs_in_and_sends_a_verification_email(client):
     assert user.role == "customer"
     assert len(mail.outbox) == 1
     assert "Verify your TicketForge email" in mail.outbox[0].subject
-    assert emails.verification_url(user.pk) in mail.outbox[0].body
+    # The token embeds a timestamp, so compare what it *decodes* to rather than
+    # the exact string (which changes if the clock ticks mid-test).
+    match = re.search(r"/accounts/verify/([^/\s]+)/", mail.outbox[0].body)
+    assert match is not None
+    assert emails.read_verification_token(unquote(match.group(1))) == user.pk
 
 
 def test_verification_link_marks_the_account_verified(client):
@@ -112,3 +119,24 @@ def test_refresh_token_cannot_be_used_as_access_token(client):
         "/accounts/api/token/refresh/", data={"refresh": access}, content_type="application/json"
     )
     assert rejected.status_code == 401
+
+
+def test_an_api_password_reset_ends_a_lockout(customer):
+    from django.core import signing
+    from rest_framework.test import APIClient
+
+    from web.accounts.throttling import is_login_blocked, register_failed_login
+    from web.accounts.views import RESET_SALT
+
+    for _ in range(5):
+        register_failed_login("203.0.113.9", customer.email)
+    assert is_login_blocked("127.0.0.1", customer.email)
+
+    token = signing.dumps({"uid": customer.pk}, salt=RESET_SALT)
+    response = APIClient().post(
+        "/accounts/api/password-reset/confirm/",
+        {"token": token, "password": "a-new-pass-123"},
+        format="json",
+    )
+    assert response.status_code == 200
+    assert not is_login_blocked("127.0.0.1", customer.email)

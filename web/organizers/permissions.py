@@ -1,4 +1,4 @@
-"""Object-level permissions. Server-side always -- never trust the UI."""
+"""Object-level permissions, always enforced server-side. Never trust the UI."""
 
 from __future__ import annotations
 
