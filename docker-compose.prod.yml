@@ -1,0 +1,71 @@
+# Production overlay:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Before using it: replace every secret in .env, point SITE_ORIGIN at your
+# real domain and EMAIL_HOST at a real SMTP relay.
+#
+# DEBUG is forced off for every Django process, so `migrate` (which the API,
+# realtime and worker services wait for) refuses to run with the development
+# secrets from .env.example. The data stores and Mailpit keep their ports on
+# the internal network only: `!reset` drops what the base file publishes
+# (needs Docker Compose 2.24 or newer).
+services:
+  migrate:
+    environment:
+      DJANGO_DEBUG: "0"
+
+  web:
+    environment:
+      DJANGO_DEBUG: "0"
+      GUNICORN_WORKERS: "5"
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  api:
+    environment:
+      UVICORN_WORKERS: "4"
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  realtime:
+    environment:
+      DJANGO_DEBUG: "0"
+    restart: always
+
+  worker:
+    restart: always
+    environment:
+      DJANGO_DEBUG: "0"
+      CELERY_CONCURRENCY: "8"
+
+  beat:
+    environment:
+      DJANGO_DEBUG: "0"
+    restart: always
+
+  nginx:
+    restart: always
+
+  mysql:
+    restart: always
+    ports: !reset []
+    environment:
+      # Read only on first start: no test-database rights in production.
+      MYSQL_TEST_GRANTS: "0"
+
+  redis:
+    restart: always
+    ports: !reset []
+
+  search:
+    restart: always
+    ports: !reset []
+
+  mailpit:
+    ports: !reset []
