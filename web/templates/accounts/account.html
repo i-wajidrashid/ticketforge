@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Your account — TicketForge{% endblock %}
+{% block content %}
+<section class="account">
+  <header class="account-head">
+    <div>
+      <p class="eyebrow">Signed in as</p>
+      <h1>{{ user.email }}</h1>
+    </div>
+    {% if user.is_verified %}
+      <span class="pill pill-ok">Email verified</span>
+    {% else %}
+      <form method="post" action="{% url 'accounts:resend-verification' %}">
+        {% csrf_token %}
+        <button class="button button-small" type="submit">Resend verification email</button>
+      </form>
+    {% endif %}
+  </header>
+
+  {% if not user.is_verified %}
+    <div class="flash flash-warning">
+      Check Mailpit at <a href="http://localhost:8025" target="_blank" rel="noreferrer">localhost:8025</a>
+      for your verification link. Buying tickets unlocks after verification.
+    </div>
+  {% endif %}
+
+  <h2>Your tickets</h2>
+  <div class="ticket-list">
+    {% for ticket in tickets %}
+      <div class="ticket-row">
+        <div>
+          <strong>Ticket {{ ticket.id|slice:":8" }}</strong>
+          <p class="muted small">Order {{ ticket.order_id|slice:":8" }} · {{ ticket.status|capfirst }}</p>
+        </div>
+        {% if ticket.status == "valid" or ticket.status == "checked_in" %}
+          <a class="button button-small button-ghost" href="{% url 'accounts:ticket-pdf' ticket.id %}">Download PDF</a>
+        {% else %}
+          <span class="pill">{{ ticket.status|capfirst }}</span>
+        {% endif %}
+      </div>
+    {% empty %}
+      <p class="muted">No tickets yet. <a href="{% url 'events:index' %}">Browse events</a>.</p>
+    {% endfor %}
+  </div>
+
+  <h2>Your orders</h2>
+  <table class="table">
+    <thead><tr><th>Order</th><th>Status</th><th>Total</th><th>Placed</th></tr></thead>
+    <tbody>
+      {% for order in orders %}
+        <tr>
+          <td class="mono">{{ order.id|slice:":8" }}</td>
+          <td><span class="pill">{{ order.status|capfirst }}</span></td>
+          <td>${{ order.total_cents|floatformat:0 }}</td>
+          <td class="muted">{{ order.created_at|date:"j M Y, H:i" }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="4" class="muted">No orders yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

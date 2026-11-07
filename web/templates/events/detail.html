@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}{{ event.title }} — TicketForge{% endblock %}
+
+{% block content %}
+{% if event.status == "cancelled" %}
+  <div class="flash flash-error">This event has been cancelled. Existing orders are being refunded automatically.</div>
+{% endif %}
+
+<article class="detail">
+  <header class="detail-head">
+    <p class="eyebrow">{{ event.starts_at|date:"l j F · H:i" }} UTC · {{ event.venue.name }}, {{ event.venue.city }}</p>
+    <h1>{{ event.title }}</h1>
+    <p class="lede">{{ event.description|default:"Doors open shortly before the start time."|linebreaksbr }}</p>
+    <div class="detail-facts">
+      <span class="pill">{{ event.get_category_display }}</span>
+      <span class="pill">{{ event.venue.name }}</span>
+      <span class="pill">{{ event.get_status_display }}</span>
+    </div>
+  </header>
+
+  <div class="detail-grid">
+    <section class="panel">
+      <h2>Choose your tickets</h2>
+
+      {% if not user.is_authenticated %}
+        <p class="muted">Please <a href="{% url 'accounts:login' %}?next={{ request.path|urlencode }}">log in</a> to hold seats.</p>
+      {% elif not is_verified %}
+        <div class="flash flash-warning">
+          Verify your email to buy tickets. <a href="{% url 'accounts:account' %}">Resend the link</a>.
+        </div>
+      {% endif %}
+
+      {% if seated %}
+        {% if ticket_types|length > 1 %}
+          <label class="field seat-type-picker">
+            <span>Ticket type for your seats</span>
+            <select id="seat-ticket-type">
+              {% for ticket_type in ticket_types %}
+                {% if ticket_type.inventory_mode == "seated" %}
+                  <option value="{{ ticket_type.id }}">{{ ticket_type.name }} — ${{ ticket_type.price_display }}</option>
+                {% endif %}
+              {% endfor %}
+            </select>
+          </label>
+        {% endif %}
+        <div id="seat-map" class="seat-map" aria-live="polite">
+          <p class="muted">Loading the seat map…</p>
+        </div>
+        <div class="seat-legend">
+          <span><i class="dot dot-available"></i> Available</span>
+          <span><i class="dot dot-selected"></i> Selected</span>
+          <span><i class="dot dot-held"></i> On hold</span>
+          <span><i class="dot dot-sold"></i> Sold</span>
+        </div>
+        <button id="buy-seats" class="button" type="button" disabled>Hold selected seats</button>
+      {% endif %}
+
+      <div class="ticket-types">
+        {% for ticket_type in ticket_types %}
+          <div class="ticket-type">
+            <div>
+              <strong>{{ ticket_type.name }}</strong>
+              <p class="muted">
+                ${{ ticket_type.price_display }} · {{ ticket_type.inventory_mode|capfirst }}
+                · max {{ ticket_type.max_per_order }} per order
+              </p>
+            </div>
+            {% if ticket_type.inventory_mode == "ga" %}
+              <button class="button button-small add-ga" type="button"
+                      data-ticket-type="{{ ticket_type.id }}"
+                      data-price="{{ ticket_type.price_cents }}"
+                      {% if not is_verified %}disabled{% endif %}>
+                Hold 1 ticket
+              </button>
+            {% else %}
+              <span class="pill">Pick seats above</span>
+            {% endif %}
+          </div>
+        {% empty %}
+          <p class="muted">Tickets for this event are not configured yet.</p>
+        {% endfor %}
+      </div>
+
+      <div id="hold-panel" class="hold-panel" hidden>
+        <div class="hold-head">
+          <h3>Your hold</h3>
+          <span id="hold-timer" class="countdown">10:00</span>
+        </div>
+        <ul id="hold-items" class="hold-items"></ul>
+        <div class="hold-foot">
+          <strong id="hold-total">$0.00</strong>
+          <button id="pay-button" class="button" type="button">Pay now</button>
+        </div>
+        <p class="muted small">Seats are reserved for 10 minutes. Payment is simulated locally (Stripe test mode).</p>
+      </div>
+    </section>
+
+    <aside class="panel aside">
+      <h2>Event details</h2>
+      <dl class="facts">
+        <dt>Starts</dt><dd>{{ event.starts_at|date:"D j M Y, H:i" }} UTC</dd>
+        <dt>Ends</dt><dd>{{ event.ends_at|date:"D j M Y, H:i" }} UTC</dd>
+        <dt>Venue</dt><dd>{{ event.venue.name }}<br>{{ event.venue.address }}, {{ event.venue.city }}</dd>
+        <dt>Organizer</dt><dd>{{ event.organizer.name }}</dd>
+        <dt>Capacity</dt><dd>{{ event.venue.capacity }} people</dd>
+      </dl>
+      <p class="muted small">Every ticket carries a signed QR code. A second scan is rejected and reports the first scan time.</p>
+    </aside>
+  </div>
+</article>
+
+{{ tf_config|json_script:"tf-config" }}
+{% endblock %}

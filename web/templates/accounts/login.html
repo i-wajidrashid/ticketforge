@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Log in — TicketForge{% endblock %}
+{% block content %}
+<section class="auth-card">
+  <h1>Welcome back</h1>
+  <p class="muted">Log in to hold seats and reach your tickets.</p>
+  <form method="post" class="stack">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="flash flash-error">{{ form.non_field_errors|join:" " }}</div>{% endif %}
+    <label class="field"><span>Email</span>{{ form.email }}{{ form.email.errors }}</label>
+    <label class="field"><span>Password</span>{{ form.password }}{{ form.password.errors }}</label>
+    <button class="button" type="submit">Log in</button>
+  </form>
+  <p class="muted small">New here? <a href="{% url 'accounts:signup' %}">Create an account</a>.</p>
+</section>
+{% endblock %}

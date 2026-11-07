@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}TicketForge — events worth leaving the house for{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <p class="eyebrow">Live events · reserved seats · instant tickets</p>
+  <h1>Find your next great night.</h1>
+  <p class="lede">Real seat maps, ten-minute holds, and tickets that can only be scanned once.</p>
+
+  <form class="filters" method="get" action="{% url 'events:index' %}">
+    <label class="field">
+      <span>Search</span>
+      <input type="search" name="q" value="{{ query }}" placeholder="concert, tech, comedy…">
+    </label>
+    <label class="field">
+      <span>City</span>
+      <select name="city">
+        <option value="">Anywhere</option>
+        {% for option in cities %}
+          <option value="{{ option }}" {% if option == city %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span>Category</span>
+      <select name="category">
+        <option value="">Everything</option>
+        {% for value, label in categories %}
+          <option value="{{ value }}" {% if value == category %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="button" type="submit">Search</button>
+  </form>
+</section>
+
+<section class="event-grid">
+  {% for event in events %}
+    <article class="event-card">
+      <a class="event-cover" href="{% url 'events:detail' event.slug %}">
+        {% if event.cover_image %}
+          <img src="{{ event.cover_image.url }}" alt="" loading="lazy">
+        {% else %}
+          <span class="cover-placeholder">{{ event.category|upper }}</span>
+        {% endif %}
+        <span class="badge badge-{{ event.status }}">{{ event.get_status_display }}</span>
+      </a>
+      <div class="event-body">
+        <p class="event-meta">{{ event.starts_at|date:"D j M · H:i" }} UTC · {{ event.venue.city }}</p>
+        <h2><a href="{% url 'events:detail' event.slug %}">{{ event.title }}</a></h2>
+        <p class="muted">{{ event.venue.name }}</p>
+        <div class="event-foot">
+          <span class="price">from ${{ event.min_price_display }}</span>
+          <span class="pill">{{ event.ticket_types.count }} ticket type{{ event.ticket_types.count|pluralize }}</span>
+        </div>
+      </div>
+    </article>
+  {% empty %}
+    <div class="empty">
+      <h2>No events match that search.</h2>
+      <p>Try a different city, category, or a shorter query.</p>
+      <a class="button button-ghost" href="{% url 'events:index' %}">Clear filters</a>
+    </div>
+  {% endfor %}
+</section>
+{% endblock %}

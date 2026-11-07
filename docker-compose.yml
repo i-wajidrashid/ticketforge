@@ -1,0 +1,158 @@
+name: ticketforge
+
+x-app: &app
+  image: ticketforge:latest
+  env_file: [.env]
+  restart: unless-stopped
+  volumes:
+    - static_data:/app/staticfiles
+    - media_data:/app/media
+
+x-deps: &deps
+  mysql:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  search:
+    condition: service_healthy
+
+services:
+  mysql:
+    image: mysql:8.4
+    env_file: [.env]
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql-init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  search:
+    image: getmeili/meilisearch:v1.11
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-dev-meili-master-key}
+      MEILI_ENV: development
+      MEILI_NO_ANALYTICS: "true"
+    ports:
+      - "7700:7700"
+    volumes:
+      - meili_data:/meili_data
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:7700/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mailpit:
+    image: axllent/mailpit:v1.20
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+
+  # One-shot schema owner: Django migrations (core) then Alembic (checkout).
+  migrate:
+    <<: *app
+    command: ["migrate"]
+    environment:
+      SERVICE_ROLE: migrate
+    depends_on: *deps
+    restart: "no"
+
+  web:
+    <<: *app
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["web"]
+    environment:
+      SERVICE_ROLE: web
+    depends_on:
+      <<: *deps
+      migrate:
+        condition: service_completed_successfully
+    expose: ["8000"]
+
+  api:
+    <<: *app
+    command: ["api"]
+    environment:
+      SERVICE_ROLE: api
+    depends_on:
+      <<: *deps
+      migrate:
+        condition: service_completed_successfully
+    expose: ["8001"]
+
+  realtime:
+    <<: *app
+    command: ["realtime"]
+    environment:
+      SERVICE_ROLE: realtime
+    depends_on:
+      <<: *deps
+      migrate:
+        condition: service_completed_successfully
+    expose: ["8002"]
+
+  worker:
+    <<: *app
+    command: ["worker"]
+    environment:
+      SERVICE_ROLE: worker
+    depends_on:
+      <<: *deps
+      migrate:
+        condition: service_completed_successfully
+
+  beat:
+    <<: *app
+    command: ["beat"]
+    environment:
+      SERVICE_ROLE: beat
+    depends_on:
+      <<: *deps
+      migrate:
+        condition: service_completed_successfully
+
+  nginx:
+    build:
+      context: ./deploy/nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - static_data:/static:ro
+      - media_data:/media:ro
+    depends_on:
+      - web
+      - api
+      - realtime
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+  redis_data:
+  meili_data:
+  static_data:
+  media_data:
