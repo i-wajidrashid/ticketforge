@@ -20,7 +20,10 @@ os.environ.setdefault("CELERY_TASK_ALWAYS_EAGER", "1")
 os.environ.setdefault("SEARCH_ENABLED", "0")
 os.environ.setdefault("HOLD_RATE_LIMIT_PER_MINUTE", "1000")
 os.environ.setdefault("STRIPE_GATEWAY", "fake")
-os.environ.setdefault("REDIS_URL", "redis://127.0.0.1:6379/0")
+# Separate logical Redis DB + Meilisearch index so the test suite can run
+# while the development stack is up without sharing state.
+os.environ.setdefault("REDIS_URL", "redis://127.0.0.1:6379/5")
+os.environ.setdefault("MEILI_INDEX", "events_test")
 
 from pathlib import Path
 
