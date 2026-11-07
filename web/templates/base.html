@@ -9,11 +9,21 @@
   <link rel="icon" href="{% static 'img/favicon.svg' %}" type="image/svg+xml">
   <link rel="preload" href="{% static 'fonts/big-shoulders-display.woff2' %}" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="{% static 'fonts/schibsted-grotesk.woff2' %}" as="font" type="font/woff2" crossorigin>
+  {% if demo_mode %}<meta name="robots" content="noindex, nofollow">{% endif %}
   <link rel="stylesheet" href="{% static 'css/app.css' %}?v={{ asset_version }}">
   {% block head %}{% endblock %}
 </head>
 <body class="{% block body_class %}{% endblock %}">
   <a class="skip-link" href="#main">Skip to content</a>
+
+  {% if demo_mode %}
+  <aside class="demo-banner" aria-label="Demo notice">
+    <div class="wrap">
+      <p><strong>Demo only.</strong> Payments are simulated and no real tickets are sold. Please don’t enter real personal or payment details.</p>
+      <a href="https://github.com/i-wajidrashid/ticketforge" rel="noopener">Source code</a>
+    </div>
+  </aside>
+  {% endif %}
 
   <header class="site-header">
     <div class="wrap">
@@ -67,7 +77,7 @@
 
   <footer class="site-footer">
     <div class="wrap">
-      <p>TicketForge. Times are shown in Karachi time.</p>
+      <p>TicketForge. Times are shown in Karachi time.{% if demo_mode %} This is a demo of an open-source project: nothing here is for sale.{% endif %}</p>
       <nav class="footer-links" aria-label="Footer">
         <a href="{% url 'events:index' %}">All events</a>
         {% if user.is_authenticated %}<a href="{% url 'accounts:account' %}">My tickets</a>{% endif %}

@@ -11,7 +11,9 @@ import pytest
 STRONG = "x" * 40
 
 
-def _import_settings(**overrides: str) -> subprocess.CompletedProcess[str]:
+def _import_settings(
+    code: str = "import web.config.settings", **overrides: str
+) -> subprocess.CompletedProcess[str]:
     env = {
         k: v
         for k, v in os.environ.items()
@@ -20,8 +22,9 @@ def _import_settings(**overrides: str) -> subprocess.CompletedProcess[str]:
     env.update({"DJANGO_SECRET_KEY": STRONG, "JWT_SECRET": STRONG, "QR_SECRET": STRONG})
     env.update({"STRIPE_GATEWAY": "fake"})
     env.update(overrides)
-    return subprocess.run(
-        [sys.executable, "-c", "import web.config.settings"],
+    # `code` is always a literal from this module, never outside input.
+    return subprocess.run(  # noqa: S603
+        [sys.executable, "-c", code],
         env=env,
         capture_output=True,
         text=True,
@@ -68,3 +71,24 @@ def test_free_checkout_is_never_reached_by_omission():
 )
 def test_real_keys_or_an_explicit_fake_gateway_start(overrides):
     assert _import_settings(**overrides).returncode == 0
+
+
+def _demo_mode(**overrides: str) -> str:
+    code = "import web.config.settings as s; print(s.DEMO_MODE)"
+    result = _import_settings(code, **overrides)
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+def test_a_public_site_on_fake_payments_is_a_demo():
+    assert _demo_mode(STRIPE_GATEWAY="fake") == "True"
+
+
+def test_real_payments_or_local_development_are_not_a_demo():
+    assert _demo_mode(STRIPE_GATEWAY="auto", STRIPE_SECRET_KEY="sk_test_" + "a" * 24) == "False"
+    assert _demo_mode(DJANGO_DEBUG="1") == "False"
+
+
+def test_demo_mode_can_be_set_explicitly():
+    assert _demo_mode(STRIPE_GATEWAY="live", DEMO_MODE="1") == "True"
+    assert _demo_mode(STRIPE_GATEWAY="fake", DEMO_MODE="0") == "False"

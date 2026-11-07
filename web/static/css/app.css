@@ -251,6 +251,50 @@ main {
   gap: var(--s-4);
 }
 
+/* ----------------------------------------------------------- demo banner */
+
+/* Printed in poster yellow so nobody mistakes the demo for a real box office.
+   Sits above the sticky header and scrolls away with the page; the footer
+   repeats the notice. */
+.demo-banner {
+  background: var(--riso-yellow);
+  color: var(--ink);
+  border-bottom: 2px solid var(--ink);
+  font-size: var(--text-s);
+  line-height: 1.4;
+}
+
+.demo-banner .wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-1) var(--s-4);
+  padding-block: var(--s-2);
+}
+
+.demo-banner p {
+  margin: 0;
+}
+
+.demo-banner strong {
+  font-family: var(--font-display);
+  font-size: var(--text-m);
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.demo-banner a {
+  color: var(--ink);
+  font-weight: 600;
+  text-underline-offset: 3px;
+}
+
+.demo-banner a:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
 /* ---------------------------------------------------------------- header */
 
 .site-header {

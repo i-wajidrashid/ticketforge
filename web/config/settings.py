@@ -295,6 +295,12 @@ if not DEBUG and not STRIPE_LIVE and env("STRIPE_GATEWAY", "auto").lower() != "f
         "or STRIPE_GATEWAY=fake for a demo where that is intended."
     )
 
+# A public site taking fake payments is a demo, and must say so on every page.
+# DEMO_MODE=1 or 0 overrides the default.
+DEMO_MODE = env_bool(
+    "DEMO_MODE", not DEBUG and not STRIPE_LIVE and env("STRIPE_GATEWAY", "auto").lower() == "fake"
+)
+
 CHECKOUT_DATABASE = env("CHECKOUT_DATABASE", "checkout")
 
 # ---------------------------------------------------------------------------

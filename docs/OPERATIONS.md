@@ -110,7 +110,7 @@ Steps in the Dokploy dashboard:
 
 To move to your own domain later, point its DNS `A` record at the server, change the host in **Domains** and in the four variables above, and deploy again.
 
-With `STRIPE_GATEWAY=fake` the pay button completes the order without showing a card form, and nothing is charged. `EMAIL_HOST=mailpit` keeps all mail inside the stack, so new sign-ups never receive their verification link; visitors use the seeded accounts instead (see `seed_demo_data`). For working sign-ups, set `EMAIL_HOST`, `EMAIL_PORT` and `EMAIL_USE_TLS` for a real SMTP relay.
+With `STRIPE_GATEWAY=fake` the pay button completes the order without showing a card form, and nothing is charged. Every page then shows a demo notice and asks search engines not to index the site; `DEMO_MODE=0` or `1` overrides that. `EMAIL_HOST=mailpit` keeps all mail inside the stack, so new sign-ups never receive their verification link; visitors use the seeded accounts instead (see `seed_demo_data`). For working sign-ups, set `EMAIL_HOST`, `EMAIL_PORT` and `EMAIL_USE_TLS` for a real SMTP relay.
 
 ## TLS certificates
 

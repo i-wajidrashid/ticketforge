@@ -14,6 +14,7 @@ All notable changes to this project are recorded here. The format follows [Keep 
 ### Added
 
 - `docker-compose.dokploy.yml` for hosts where another proxy, such as Dokploy's Traefik, terminates HTTPS. nginx gets a `proxied` build mode for it that serves plain HTTP and takes the visitor's scheme and address from the proxy's forwarded headers. See "Deploying with Dokploy" in the operations guide.
+- A demo notice on every page, a footer line and a `noindex` tag when the site runs as a demo. Demo mode turns on by itself when payments use the fake gateway outside debug mode, and `DEMO_MODE` overrides it.
 - `seed_demo_data --if-empty`, and `DEMO_SEED=1` to run it from the `migrate` job, so a public demo seeds itself once on first deploy.
 
 ### Fixed

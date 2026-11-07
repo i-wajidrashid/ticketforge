@@ -42,4 +42,5 @@ def site(request: HttpRequest) -> dict[str, Any]:
         "nav_can_scan": is_admin or role in {"organizer", "door_staff"},
         # Local-only hints, such as where the development mail catcher is.
         "dev_hints": settings.DEBUG,
+        "demo_mode": settings.DEMO_MODE,
     }
