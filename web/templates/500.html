@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Something broke on our side | TicketForge{% endblock %}
+{% block content %}
+<div class="error-page">
+  <div class="stack">
+    <h1>Something broke on our side</h1>
+    <p class="muted">We’ve logged the error. Try again in a moment; if you were paying, check My tickets before paying again.</p>
+    <div class="cluster"><a class="btn" href="{% url 'events:index' %}">See what’s on</a>{% if user.is_authenticated %}<a class="btn btn-secondary" href="{% url 'accounts:account' %}">My tickets</a>{% endif %}</div>
+  </div>
+</div>
+{% endblock %}
