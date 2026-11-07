@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Create an account | TicketForge{% endblock %}
+{% block content %}
+<div class="auth">
+  <div class="auth-form">
+    <div>
+      <h1>Create an account</h1>
+      <p class="muted">Confirm your email once, then buy tickets in a few taps.</p>
+    </div>
+    <form method="post" novalidate>
+      {% csrf_token %}
+      {% if form.non_field_errors %}<div class="notice notice-error" role="alert"><p>{{ form.non_field_errors|join:" " }}</p></div>{% endif %}
+      {% include "accounts/_field.html" with field=form.email label="Email" %}
+      {% include "accounts/_field.html" with field=form.password1 label="Password" hint="At least 10 characters, and not only numbers." %}
+      {% include "accounts/_field.html" with field=form.password2 label="Type it again" %}
+      <button class="btn btn-lg btn-block" type="submit">Create account</button>
+    </form>
+    <p class="auth-alt">Already have an account? <a href="{% url 'accounts:login' %}">Log in</a></p>
+  </div>
+  {% include "accounts/_auth_art.html" %}
+</div>
+{% endblock %}
