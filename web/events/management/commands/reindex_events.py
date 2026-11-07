@@ -21,7 +21,7 @@ class Command(BaseCommand):
             .filter(status__in=[EventStatus.PUBLISHED, EventStatus.ON_SALE, EventStatus.SOLD_OUT])
         )
         count = 0
-        for event in queryset.iterator():
+        for event in queryset.iterator(chunk_size=200):
             upsert_event(event_document(event))
             count += 1
         self.stdout.write(self.style.SUCCESS(f"Indexed {count} events."))
